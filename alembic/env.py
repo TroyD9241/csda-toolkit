@@ -3,7 +3,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text as sql_text
 
 from csda_toolkit.db.models import Base
 
@@ -37,6 +37,9 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        # Ensure the csda schema exists before alembic creates alembic_version in it
+        connection.execute(sql_text("CREATE SCHEMA IF NOT EXISTS csda"))
+        connection.commit()
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

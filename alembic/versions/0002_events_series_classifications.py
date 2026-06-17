@@ -101,7 +101,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("classifier_run_id", sa.Integer(), sa.ForeignKey("csda.classifier_runs.id"), nullable=False),
         sa.Column("entity_type", sa.Text(), nullable=False),
-        sa.Column("entity_id", sa.Integer(), nullable=False),
+        sa.Column("entity_id", sa.BigInteger(), nullable=False),
         sa.Column("label_name", sa.Text(), nullable=False),
         sa.Column("label_value", sa.Text(), nullable=False),
         sa.Column("confidence", sa.Numeric(4, 3), nullable=True),

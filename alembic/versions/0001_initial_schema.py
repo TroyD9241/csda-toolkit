@@ -17,8 +17,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE SCHEMA IF NOT EXISTS csda")
-
     # ── 0001_initial ──────────────────────────────────────────────────────
     op.create_table(
         "demo_files",
@@ -222,21 +220,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         schema="csda",
     )
-    op.add_column(
-        "matches",
-        sa.Column("played_at", sa.DateTime(timezone=True), nullable=True),
-        schema="csda",
-    )
-    op.add_column(
-        "matches",
-        sa.Column("played_at_source", sa.Text(), nullable=True),
-        schema="csda",
-    )
-    op.add_column(
-        "matches",
-        sa.Column("played_at_confidence", sa.Numeric(4, 3), nullable=True),
-        schema="csda",
-    )
+    # Note: played_at, played_at_source, played_at_confidence columns
+    # were already added to matches table at creation (lines 55-57).
 
     # ── 0005_classification ───────────────────────────────────────────────
     op.create_table(

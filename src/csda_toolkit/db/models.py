@@ -20,9 +20,10 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
     func,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, foreign, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -134,7 +135,9 @@ class Player(Base):
         back_populates="player"
     )
     player_aliases: Mapped[list["PlayerAlias"]] = relationship(
-        back_populates="player"
+        back_populates="player",
+        primaryjoin="Player.steam_id == PlayerAlias.steam_id",
+        foreign_keys="PlayerAlias.steam_id",
     )
 
 
@@ -187,7 +190,19 @@ class Round(Base):
     )
 
     match: Mapped["Match"] = relationship(back_populates="rounds")
-    kills: Mapped[list["Kill"]] = relationship(back_populates="round")
+    # NOTE: Kill↔Round composite relationship (match_id+round_number) is not
+    # modeled as an ORM relationship due to the lack of a FK. Use explicit
+    # query joins to access kills per round:
+    #   s.query(Kill).join(Round, and_(Kill.match_id==Round.match_id,
+    #                                  Kill.round_number==Round.round_number))
+    kills: Mapped[list["Kill"]] = relationship(
+        primaryjoin=(
+            "and_("
+            "Round.match_id == foreign(Kill.match_id), "
+            "Round.round_number == Kill.round_number)"
+        ),
+        viewonly=True,
+    )
     round_classifications: Mapped[list["RoundClassification"]] = relationship(
         back_populates="round"
     )
@@ -224,7 +239,8 @@ class Kill(Base):
     )
 
     match: Mapped["Match"] = relationship(back_populates="kills")
-    round: Mapped["Round"] = relationship(back_populates="kills")
+    # NOTE: Round relationship not modeled — use explicit join by
+    # (match_id, round_number). See Round.kills note above.
 
 
 class ExternalMatchLink(Base):
@@ -365,7 +381,10 @@ class Team(Base):
         back_populates="team"
     )
     aliases: Mapped[list["TeamAlias"]] = relationship(back_populates="team")
-    match_teams: Mapped[list["MatchTeam"]] = relationship(back_populates="team")
+    match_teams: Mapped[list["MatchTeam"]] = relationship(
+        back_populates="team",
+        foreign_keys="MatchTeam.team_id",  # disambiguate from parent_team_id FK
+    )
     memberships: Mapped[list["TeamMembership"]] = relationship(
         back_populates="team"
     )
@@ -693,7 +712,7 @@ class Classification(Base):
         Integer, ForeignKey("csda.classifier_runs.id"), nullable=False
     )
     entity_type: Mapped[str] = mapped_column(Text)
-    entity_id: Mapped[int] = mapped_column(Integer)
+    entity_id: Mapped[int] = mapped_column(BigInteger)  # holds 64-bit Steam IDs and other entity IDs
     label_name: Mapped[str] = mapped_column(Text)
     label_value: Mapped[str] = mapped_column(Text)
     confidence: Mapped[Optional[float]] = mapped_column(Numeric(4, 3), nullable=True)
