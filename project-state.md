@@ -6,7 +6,7 @@ It exists so that a new conversation / context window can be fully oriented with
 
 Keep it updated whenever significant changes are made.
 
-Last updated: after `0007_round_equipment_purchases_drops` migration — CS2 demo parsing fully operational with round tracking, elimination winner detection, and equipment tracking.
+Last updated: v0.2.0 — Event/Series/Classification taxonomy, migration 0002, role taxonomy module, analytical framework for IGL/economy/tactical signals documented.
 
 ---
 
@@ -231,6 +231,15 @@ Key files:
 - `csda.round_purchases` — synthesized purchase events from `m_iWeaponPurchasesThisRound` property
 - `csda.weapon_drops` — weapon drop/give events with `picked_up_by` tracking
 
+### `0008_events_series_classifications.py`
+- `csda.events` — tournament/event metadata (name, slug, tier, region, dates)
+- `csda.event_series` — best-of series within an event (BO1/BO3/BO5), linking two teams + veto order
+- `csda.matches` — added `series_id` (FK → event_series) + `map_number` (which map in the series)
+- `csda.match_contexts` — added `event_id` (FK → events)
+- `csda.classifier_runs` — made `match_id` nullable; added `scope_type` + `scope_id` for polymorphic scoping (event/series/match level)
+- `csda.classifications` — new unified polymorphic classification table (`entity_type`, `entity_id`, `label_name`, `label_value`, `confidence`, `metadata`) replacing per-type classification tables for new classifiers
+- Old tables (`round_classifications`, `match_classifications`, `player_situation_roles`) retained for backward compatibility
+
 ---
 
 ## Key design decisions (locked in)
@@ -400,6 +409,17 @@ All 44 tests passing:
 - Schema infrastructure ready; actual classifiers in `csda-analytics` crate (economy_classifier ✅, others planned)
 - `player_situation_roles` encodes role = f(player, lineup, map, side) — not a static player property
 
+### Role taxonomy ✅ DONE
+- `classifiers/role_taxonomy.py` — single source of truth for all role/position classifications
+- 12 broad roles, 6 maps (dust2, mirage, inferno, nuke, overpass, ancient), per-map positions, zone role taxonomy
+- 3-level hierarchy: Broad Role → Map → Position (e.g., `broad_role=entry`, `map=dust2`, `position=long_a`)
+- See Analytics Framework section for full taxonomy
+
+### Analytics Framework ✅ DOCUMENTED (metrics not yet computed)
+- IGL metrics, economy metrics, tactical signals documented — all derived from demo data, NOT arbitrary values
+- See dedicated Analytics Framework section below
+- Metrics are **computed from real match data** once sufficient sample exists; no placeholder or assumed values
+
 ### Competitive units
 - Future model for team + lineup + coach context
 - Tables: `competitive_units`, `competitive_unit_periods`
@@ -423,26 +443,34 @@ In priority order:
 Equipment/purchases/drops parsed but not yet stored via `ingest` CLI command.
 
 ### 2. Implement classifiers
-Build classifiers using the `0005` classification pipeline:
+Build classifiers using the `0005` and `0008` classification pipeline:
 - `round_archetype_classifier` — tactical type (exec/contact/split/default/retake/save)
-- `player_role_classifier` — situational role from kill/utility/position patterns
+- `player_role_classifier` — situational role from kill/utility/position patterns (see role taxonomy)
 - Economy classifier already exists in `csda-analytics`
+- IGL metrics classifier — see Analytics Framework section
+- Tactical signals classifier — CT stack detection, mid-round read tracking
 
-### 3. HLTV enrichment adapter
+### 3. Build IGL assignment workflow
+IGL has no mechanical in-game signal — designate via:
+- HLTV match page annotation
+- Manual analyst input via CLI or future UI
+- Store as `role_broad=igl` in `classifications` with `entity_type=player`
+
+### 4. HLTV enrichment adapter
 Connect HLTV data for team/match context auto-population.
 
-### 4. Competitive unit model
+### 5. Competitive unit model
 Add `csda.competitive_units` and `csda.competitive_unit_periods` as a future migration.
 This is the team + lineup + coach context layer.
 
-### 5. Damage / utility / bomb event tables
+### 6. API layer
+Add `crates/csda-api` with Axum-based HTTP/WebSocket endpoints for UI consumption.
+
+### 7. Damage / utility / bomb event tables
 Next event-level tables:
 - `csda.damage_events`
 - `csda.utility_events`
 - `csda.bomb_events`
-
-### 6. API layer
-Add `crates/csda-api` with Axum-based HTTP/WebSocket endpoints for UI consumption.
 
 ---
 
@@ -483,10 +511,196 @@ Default `DATABASE_URL`: `postgres://csda:csda@localhost:5432/csda`
 
 | Doc | Purpose |
 |---|---|
-| `docs/project-state.md` | **This file. Start here in a new context.** |
-| `docs/architecture.md` | Long-term platform vision and layer breakdown |
-| `docs/database.md` | Database iteration notes |
-| `docs/schema-visualizer.md` | Mermaid ERD of current full schema |
-| `docs/docker.md` | Local dev Docker setup |
-| `docs/schema-0002-team-context-proposal.md` | Design rationale: teams + match classification |
-| `docs/schema-0003-lineups-roster-history-proposal.md` | Design rationale: lineups + roster history + role prep |
+| `project-state.md` | **This file. Start here in a new context.** |
+| `architecture.md` | Long-term platform vision and layer breakdown |
+| `database.md` | Database iteration notes |
+| `schema-visualizer.md` | Mermaid ERD of current full schema |
+| `docker.md` | Local dev Docker setup |
+| `schema-0002-team-context-proposal.md` | Design rationale: teams + match classification |
+| `schema-0003-lineups-roster-history-proposal.md` | Design rationale: lineups + roster history + role prep |
+| `schema-0005-classification-team-hierarchy-proposal.md` | Design rationale: classification pipeline + team hierarchy + event qualifiers |
+
+---
+
+## Analytics Framework
+
+**Principle: All win rate and performance metrics are computed from real match data. No arbitrary benchmark values are used. Metrics are populated only after sufficient sample exists.**
+
+Thresholds and benchmarks referenced below come from professional tier-1 data (HLTV, Liquipedia, esport.is) and are used as classification cutoffs — not as assumed player/team performance. Real data supersedes any reference benchmark.
+
+---
+
+### Role Taxonomy (`classifiers/role_taxonomy.py`)
+
+Single source of truth for all player role and map position classifications.
+
+**3-level hierarchy:**
+
+```
+Level 1 — Broad Role:  High-level tactical identity
+Level 2 — Map:          Which map (dust2, mirage, inferno, nuke, overpass, ancient)
+Level 3 — Position:     Named location on that map for a given side
+```
+
+**Broad Roles (12):**
+`entry` · `igl` · `rifler` · `awper` · `lurker` · `support` · `anchor` · `rotator` · `second_awper` · `second_caller` · `trade_fragger` · `second_support`
+
+**Map Positions per map (all 6 maps documented with CT and T positions):**
+
+| Map | Positions |
+|-----|-----------|
+| dust2 | long_a, short_a, mid, b_tunnels, lower_tunnels |
+| mirage | a_site, palace, connector, mid, apartments, b_site |
+| inferno | a_site, apartments, mid, banana, b_site |
+| nuke | a_site_upper, ramp, b_site_lower, outside, squeaky |
+| overpass | a_site, bathrooms, connector, monster, b_site, water |
+| ancient | a_site, long_a, donut, cave, b_ramp, b_site |
+
+**Zone Roles (tactical groupings across all maps):**
+`a_anchor` · `b_anchor` · `mid_control` · `flanker` · `entry` · `lurker` · `sniper_lane` · `site_watch`
+
+**Classification schema** (stored in `classifications` table via polymorphic system):
+
+| label_name | label_value examples | Notes |
+|---|---|---|
+| `role_broad` | `entry`, `awper`, `igl` | Level 1 identity |
+| `role_map_{name}` | `long_a`, `mid`, `banana` | Map-specific position |
+| `role_zone` | `a_anchor`, `mid_control` | Tactical zone |
+| `role_secondary` | `second_awper`, `trade_fragger` | Optional modifier |
+
+**IGL designation:** Has no mechanical in-game signal. Assigned manually (HLTV, analyst annotation, or CLI input). Stored as `role_broad=igl` in `classifications` for the designated player. Once designated, all other IGL metrics are derivable from demo data.
+
+**Confidence scoring:** Combine multiple signals (weapon, position, kill order, utility usage) — lower confidence when signals conflict or sample is small.
+
+---
+
+### IGL Decision Metrics
+
+IGL performance is measured through **decision outcome proxies** — round results, site hit outcomes, and economic efficiency — not mechanical skill.
+
+**IGL cannot be auto-detected from demo data.** The IGL must be designated externally. Once designated, every metric below is derivable from parsed demo data.
+
+**Note:** All IGL metrics below are **pulled from real data** and aggregated per player (across matches where they were the designated IGL). No assumed or placeholder values. Metrics become meaningful only after sufficient sample (minimum recommended: 50+ rounds as IGL on a given map/side).
+
+#### Core IGL Metrics
+
+| Metric | Definition | How derived |
+|--------|-----------|------------|
+| `igl_pistol_win_rate` | Won pistol rounds / total pistol rounds | Round 1 and 13 outcome; team = IGL's team |
+| `igl_anti_strat_rate` | Rounds where CT read T's intended execution correctly | Cluster CT positions at round ~15s; if cluster matched T commit site AND T lost → positive |
+| `igl_economy_conversion_rate` | Buy rounds (non-eco) converted to round wins | Classify round buy type; round outcome; filter to rounds where IGL's team had buy |
+| `igl_mid_round_read_rate` | Rounds where IGL correctly adapted to mid-round info | CT: cluster shift at ~20s matched T commit → positive. T: execute at called site → positive |
+| `igl_call_success_rate` | Generic positive outcome of IGL calls | Composite: pistol win + anti-strat + economy conversion, weighted average |
+| `igl_strategy_win_rate_{type}` | Win rate per strategy type | Group rounds by classified archetype (default/exec/split/contact); compute win rate per group |
+
+#### Aggregate IGL Score (from Pley.gg research)
+```
+IGL_aggregate = (individual_player_rating + team_rating) / 2
+```
+Where `individual_player_rating` and `team_rating` come from HLTV or a future own rating system. Until rating system exists, track `igl_strategy_win_rate_{type}` and `igl_mid_round_read_rate` as primary IGL metrics.
+
+---
+
+### Team Economy Metrics
+
+**All economy metrics are computed from `PlayerRoundStats.equipment_value` per player at round start.**
+
+Buy type thresholds (from professional tier-1 data; used as classification cutoffs, not assumptions):
+
+| Buy Type | Per-player equipment threshold | Team signal |
+|---|---|---|
+| Eco | $0 – $1,500 | Pistols, no armor |
+| Force / Half-buy | $1,500 – $3,500 | SMGs/Galils, partial armor |
+| Semi-buy | $3,500 – $4,700 | Rifles, no full utility |
+| Full-buy | $4,700+ | Full rifles + armor + utility |
+
+Reference benchmarks (from HLTV/Liquipedia/esport.is; **used as classification cutoffs only**):
+
+| Matchup | Expected win rate |
+|---|---|
+| Eco vs Full-buy | ~9% (full-buy dominant) |
+| Force-buy vs Full-buy | ~27% |
+| Full-buy vs Full-buy | ~50% (coin-flip + skill) |
+| Full-buy vs Eco | ~88% |
+| Pistol round (even) | ~51% |
+
+**These reference benchmarks are cutoffs for classification, not assumed team performance. Real data supersedes.**
+
+| Metric | Definition | How derived |
+|--------|-----------|------------|
+| `eco_win_rate` | Eco rounds won / total eco rounds | Classify round as eco via equipment_value threshold; round outcome |
+| `force_win_rate` | Force rounds won / total force rounds | Same, filter to force rounds |
+| `full_buy_win_rate` | Full-buy rounds won / total full-buy rounds | Same, filter to full-buy |
+| `anti_eco_win_rate` | Full-buy rounds won / vs eco rounds faced | Filter to rounds where opponent was eco |
+| `loss_bonus_tracking` | Consecutive loss streak → loss bonus accumulation | Track round-by-round loss count + bonus per team |
+| `buy_discipline_rating` | % of rounds where team bought optimally given economy state | Compare actual buy vs recommended buy by economy model |
+
+---
+
+### Tactical Signals (CT/T Behavior)
+
+These detect specific team behaviors from position clustering at key round moments.
+
+**Detection method:** Cluster `PlayerFrame.x/y/z` (at freeze-end tick ~1000 and mid-round tick ~15,000) using k-means (k=2 for A vs B grouping). Count players per cluster to detect stacks, rotations, and aggression.
+
+#### CT-Side Signals
+
+| Signal | Detection | Classification |
+|--------|-----------|----------------|
+| `ct_stack_correct` | 4+ CT on one bombsite at tick ~15,000 AND T committed to that site AND CT won | Positive |
+| `ct_stack_wrong` | 4+ CT on one bombsite at tick ~15,000 AND T committed to the OTHER site | Negative |
+| `ct_wrong_rotate` | CT cluster moved from A→B (or B→A) between tick 1000 and tick ~20,000 AND T was committing to original site | Negative |
+| `ct_correct_adapt` | CT cluster shifted to match T commit site AND round won | Positive |
+| `ct_gamble_correct` | 4+ on one site, T hit that site, CT won | Positive |
+| `ct_gamble_wrong` | 4+ on one site, T hit other site | Negative |
+
+#### T-Side Signals
+
+| Signal | Detection | Classification |
+|--------|-----------|----------------|
+| `t_fast_execute` | 3+ T on bombsite approach within first 20s with heavy utility | Aggressive; correlates with `entry` role |
+| `t_split_correct` | Split from 2 directions, both succeeded | Positive |
+| `t_fake_detected` | Utility deployed at site A, T committed to site B | T read correctly; CT rotated wrongly |
+
+---
+
+### Per-Round Archetype Classification (Planned)
+
+Round archetype is a multi-label classification per round:
+
+| Archetype | Description |
+|---|---|
+| `default` | Standard map control, no commitment yet |
+| `exec_a` | Committed A site hit |
+| `exec_b` | Committed B site hit |
+| `split_a` | Split A from multiple angles |
+| `split_b` | Split B from multiple angles |
+| `contact` | Fast aggressive hit |
+| `lurk` | Lurk player active on far side |
+| `retake` | CT re-taking planted site |
+| `save` | Economy save, no fight sought |
+| `eco` | Dedicated eco round |
+| `anti_eco` | Full buy vs eco opponent |
+
+**Classification inputs:** Kill timing, grenade usage, position clustering at execute timing, equipment values, round outcome.
+
+---
+
+### Classifier Architecture
+
+All classifiers live in `classifiers/` and are versioned via `classifier_runs.scope_type` + `classifier_runs.scope_id`.
+
+```
+classifiers/
+  role_taxonomy.py     # ✅ Done — taxonomy definitions
+  economy.py           # Planned — buy type + economy metrics
+  tactical_signals.py  # Planned — CT/T stack detection, mid-round reads
+  igl_metrics.py      # Planned — IGL decision quality metrics
+  round_archetype.py   # Planned — round tactical type
+```
+
+Each classifier:
+- Reads canonical parsed data (kills, player_frames, round_equipment, etc.)
+- Emits `Classification` records to `classifications` table with `classifier_run_id`
+- Is rerunnable — same version, same data → same results
+- Includes confidence score for downstream weighting

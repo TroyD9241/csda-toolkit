@@ -694,12 +694,34 @@ class EconomyClassification:
 
 @dataclass
 class RoleClassification:
-    """Player role classifier output."""
+    """Player role classifier output.
+
+    IMPORTANT: confidence and performance metrics are derived from real sample data.
+    No assumed or arbitrary win rate values are stored — all values are computed
+    from parsed demo events (kills, positions, utility, economy) once sufficient
+    sample exists. Reference benchmarks from professional tier-1 data are used
+    only as classification thresholds, not as assumed player/team performance.
+
+    Matches the role_taxonomy.py taxonomy:
+    - broad_role: high-level identity (entry, awper, igl, rifler, lurker, support, anchor, rotator)
+    - map_position: named position on the map (e.g. long_a, mid, banana)
+    - zone_role: tactical zone grouping (a_anchor, b_anchor, mid_control, flanker, etc.)
+    - secondary_role: optional secondary classification
+    """
     player_steam_id: int
     map_name: str
     side: str
-    role_code: str
+    broad_role: str = ""           # e.g. "entry", "awper", "igl"
+    map_position: str = ""         # e.g. "long_a", "mid", "banana"
+    zone_role: str = ""            # e.g. "a_anchor", "mid_control", "flanker"
+    secondary_role: Optional[str] = None  # e.g. "second_awper", "trade_fragger"
     confidence: float = 0.0
+    metadata: dict = field(default_factory=dict)
+
+    @property
+    def role_code(self) -> str:
+        """Legacy composite code: {broad_role}_{map_position}."""
+        return f"{self.broad_role}_{self.map_position}"
 
 
 @dataclass
