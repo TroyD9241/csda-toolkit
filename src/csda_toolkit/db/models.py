@@ -1,4 +1,4 @@
-﻿"""SQLAlchemy 2.0 ORM models for csda-toolkit.
+"""SQLAlchemy 2.0 ORM models for csda-toolkit.
 
 Replicates all 7 migrations from the CSDEMOANALYZER Postgres schema.
 All tables live in the ``csda`` schema.
@@ -12,6 +12,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     Numeric,
@@ -72,12 +73,17 @@ class Match(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    series_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("csda.event_series.id"), nullable=True
+    )
+    map_number: Mapped[int] = mapped_column(Integer, default=0)
 
     demo_file: Mapped[Optional["DemoFile"]] = relationship(back_populates="match")
     rounds: Mapped[list["Round"]] = relationship(back_populates="match")
     kills: Mapped[list["Kill"]] = relationship(back_populates="match")
     match_players: Mapped[list["MatchPlayer"]] = relationship(back_populates="match")
     match_teams: Mapped[list["MatchTeam"]] = relationship(back_populates="match")
+    series: Mapped[Optional["EventSeries"]] = relationship(back_populates="matches")
     match_context: Mapped[Optional["MatchContext"]] = relationship(
         back_populates="match", uselist=False
     )
@@ -265,7 +271,68 @@ class AnalystNote(Base):
     match: Mapped["Match"] = relationship(back_populates="analyst_notes")
 
 
-# ── Migration 0002: Teams and match context ─────────────────────────────────
+# ── Migration 0002: Events and series ───────────────────────────────────────
+
+
+class Event(Base):
+    __tablename__ = "events"
+    __table_args__ = {"schema": "csda"}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text)
+    slug: Mapped[str] = mapped_column(Text, default="")
+    tier: Mapped[int] = mapped_column(SmallInteger, default=0)
+    region: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(Text, default="unknown")
+    start_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    series: Mapped[list["EventSeries"]] = relationship(back_populates="event")
+
+
+class EventSeries(Base):
+    __tablename__ = "event_series"
+    __table_args__ = {"schema": "csda"}
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("csda.events.id"), nullable=False
+    )
+    series_type: Mapped[str] = mapped_column(Text, default="")
+    round_name: Mapped[str] = mapped_column(Text, default="")
+    team_a_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("csda.teams.id"), nullable=True
+    )
+    team_b_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("csda.teams.id"), nullable=True
+    )
+    team_a_name: Mapped[str] = mapped_column(Text, default="")
+    team_b_name: Mapped[str] = mapped_column(Text, default="")
+    team_a_score: Mapped[int] = mapped_column(SmallInteger, default=0)
+    team_b_score: Mapped[int] = mapped_column(SmallInteger, default=0)
+    map_veto_json: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(Text, default="unknown")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    event: Mapped["Event"] = relationship(back_populates="series")
+    matches: Mapped[list["Match"]] = relationship(back_populates="series")
+    team_a: Mapped[Optional["Team"]] = relationship(foreign_keys=[team_a_id])
+    team_b: Mapped[Optional["Team"]] = relationship(foreign_keys=[team_b_id])
+
+
+# ── Migration 0003: Teams and match context ─────────────────────────────────
 
 
 class Team(Base):
@@ -408,6 +475,9 @@ class MatchContext(Base):
     classification_source: Mapped[str] = mapped_column(Text)
     classification_version: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     event_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    event_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("csda.events.id"), nullable=True
+    )
     confidence: Mapped[Optional[float]] = mapped_column(Numeric(4, 3), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     extra_data: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
@@ -419,9 +489,10 @@ class MatchContext(Base):
     )
 
     match: Mapped["Match"] = relationship(back_populates="match_context")
+    event: Mapped[Optional["Event"]] = relationship()
 
 
-# ── Migration 0003: Lineups and roster history ──────────────────────────────
+# ── Migration 0004: Lineups and roster history ──────────────────────────────
 
 
 class Lineup(Base):
@@ -493,10 +564,10 @@ class TeamMembership(Base):
     player: Mapped["Player"] = relationship(back_populates="team_memberships")
 
 
-# ── Migration 0004: Team type hierarchy (alters teams — already in Team model)
+# ── Migration 0005: Team type hierarchy (alters teams — already in Team model)
 
 
-# ── Migration 0005: Classification pipeline ─────────────────────────────────
+# ── Migration 0006: Classification pipeline ─────────────────────────────────
 
 
 class ClassifierRun(Base):
@@ -506,15 +577,17 @@ class ClassifierRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     classifier_name: Mapped[str] = mapped_column(Text)
     classifier_version: Mapped[str] = mapped_column(Text)
-    match_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("csda.matches.id"), nullable=False
+    match_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("csda.matches.id"), nullable=True
     )
+    scope_type: Mapped[str] = mapped_column(Text, default="match")
+    scope_id: Mapped[int] = mapped_column(Integer, default=0)
     ran_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     extra_data: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
 
-    match: Mapped["Match"] = relationship(back_populates="classifier_runs")
+    match: Mapped[Optional["Match"]] = relationship(back_populates="classifier_runs")
     round_classifications: Mapped[list["RoundClassification"]] = relationship(
         back_populates="classifier_run"
     )
@@ -522,6 +595,9 @@ class ClassifierRun(Base):
         back_populates="classifier_run"
     )
     match_classifications: Mapped[list["MatchClassification"]] = relationship(
+        back_populates="classifier_run"
+    )
+    classifications: Mapped[list["Classification"]] = relationship(
         back_populates="classifier_run"
     )
 
@@ -605,6 +681,32 @@ class MatchClassification(Base):
     match: Mapped["Match"] = relationship(back_populates="match_classifications")
 
 
+class Classification(Base):
+    __tablename__ = "classifications"
+    __table_args__ = (
+        Index("ix_classifications_entity", "entity_type", "entity_id"),
+        {"schema": "csda"},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    classifier_run_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("csda.classifier_runs.id"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(Text)
+    entity_id: Mapped[int] = mapped_column(Integer)
+    label_name: Mapped[str] = mapped_column(Text)
+    label_value: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[Optional[float]] = mapped_column(Numeric(4, 3), nullable=True)
+    metadata: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    classifier_run: Mapped["ClassifierRun"] = relationship(
+        back_populates="classifications"
+    )
+
+
 class MatchEventQualifier(Base):
     __tablename__ = "match_event_qualifiers"
     __table_args__ = {"schema": "csda"}
@@ -627,7 +729,7 @@ class MatchEventQualifier(Base):
     match: Mapped["Match"] = relationship(back_populates="match_event_qualifier")
 
 
-# ── Migration 0006: Player aliases ──────────────────────────────────────────
+# ── Migration 0007: Player aliases ──────────────────────────────────────────
 
 
 class PlayerAlias(Base):
@@ -657,7 +759,7 @@ class PlayerAlias(Base):
         primaryjoin="PlayerAlias.steam_id == Player.steam_id")
 
 
-# ── Migration 0007: Round equipment, purchases, and weapon drops ────────────
+# ── Migration 0008: Round equipment, purchases, and weapon drops ────────────
 
 
 class RoundEquipment(Base):

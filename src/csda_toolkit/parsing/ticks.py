@@ -42,7 +42,6 @@ PAWN_FIELDS = [
     "CCSPlayerPawn.m_unRoundStartEquipmentValue",
     "CCSPlayerPawn.m_bHasHelmet",
     "CCSPlayerPawn.m_bHasDefuser",
-    "CCSPlayerPawn.m_bHasHeavyArmor",
     "CCSPlayerPawn.m_bIsBuyMenuOpen",
 ]
 
@@ -125,7 +124,9 @@ TEAM_FIELDS = [
 
 
 def _get_val(df: pd.DataFrame, i: int, col: str):
-    """Get a value from a DataFrame cell, handling NaN."""
+    """Get a value from a DataFrame cell, handling NaN and missing columns."""
+    if col not in df.columns:
+        return None
     val = df.iloc[i][col]
     if isinstance(val, float) and pd.isna(val):
         return None

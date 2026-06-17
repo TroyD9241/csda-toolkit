@@ -24,6 +24,43 @@ class DemoSource(str, Enum):
     UNKNOWN = "unknown"
 
 
+# ── Event-level models ────────────────────────────────────────────────────
+
+
+@dataclass
+class Event:
+    """A tournament or event containing series (e.g. BLAST Rivals 2026)."""
+    name: str
+    slug: str = ""
+    tier: int = 0               # 1=tier1, 2=tier2, 3=tier3, 0=unknown
+    region: str = ""
+    source: str = "unknown"
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    id: int = 0
+    metadata: dict = field(default_factory=dict)
+
+
+@dataclass
+class EventSeries:
+    """A best-of series within an event (BO1, BO3, BO5).
+
+    Links two teams across multiple maps in a single series.
+    """
+    event_id: int
+    series_type: str = ""       # "bo1", "bo3", "bo5"
+    round_name: str = ""        # "quarterfinal", "semifinal", "grand_final"
+    team_a_id: int = 0
+    team_b_id: int = 0
+    team_a_name: str = ""
+    team_b_name: str = ""
+    team_a_score: int = 0
+    team_b_score: int = 0
+    map_veto_json: str = ""     # veto order as JSON string
+    source: str = "unknown"
+    id: int = 0
+
+
 # ── Match-level models ──────────────────────────────────────────────────────
 
 
@@ -68,6 +105,7 @@ class MatchContext:
     analysis_pool: str = "low_signal"
     classification_source: str = "unknown"
     event_name: Optional[str] = None
+    event_id: int = 0
 
 
 @dataclass
@@ -100,6 +138,8 @@ class Match:
     kills: list["Kill"] = field(default_factory=list)
     context: Optional[MatchContext] = None
     external_links: dict[str, str] = field(default_factory=dict)
+    series_id: int = 0
+    map_number: int = 0     # 1-based index within series
 
 
 # ── Round-level models ──────────────────────────────────────────────────────
@@ -193,6 +233,7 @@ class Kill:
     penetrated: int = 0
     thrusmoke: bool = False
     attackerblind: bool = False
+    attackerinair: bool = False
     noscope: bool = False
     assistedflash: bool = False
     dominated: bool = False
@@ -202,6 +243,7 @@ class Kill:
     dmg_health: int = 0
     dmg_armor: int = 0
     hitgroup: int = -1
+    hitgroup_name: str = "unknown"
 
 
 @dataclass
@@ -380,6 +422,37 @@ class InfernoEvent:
     z: Optional[float] = None
 
 
+# ── Tick-marker events (no extra data beyond event type + tick) ──────────────
+
+
+@dataclass
+class TickEvent:
+    """A tick-marker — something happened at this tick, no other data.
+
+    Used for: begin_new_match, buytime_ended, cs_pre_restart, cs_round_final_beep,
+    cs_round_start_beep, round_announce_match_start, round_officially_ended,
+    round_poststart, round_prestart, round_time_warning.
+    """
+    event_type: str
+    tick: int
+
+
+@dataclass
+class RoundStartEvent:
+    """Parsed round_start event — has extra fields beyond tick."""
+    tick: int
+    frag_limit: int = 0
+    objective: str = ""
+    time_limit: int = 0
+
+
+@dataclass
+class HltvVersionInfo:
+    """Parsed hltv_versioninfo event."""
+    tick: int
+    version: int = 0
+
+
 # ── Rank / progression models ───────────────────────────────────────────────
 
 
@@ -410,7 +483,6 @@ class PlayerEquipment:
     armor: bool = False
     helmet: bool = False
     defuse_kit: Optional[bool] = None
-    has_heavy_armor: Optional[bool] = None
     freezetime_end_value: Optional[int] = None
     round_start_value: Optional[int] = None
 
@@ -561,6 +633,51 @@ class RoundArchetype(str, Enum):
     UNKNOWN = "unknown"
 
 
+# ── Skin / Item-drop models (from parse_skins / parse_item_drops) ───────────
+
+
+@dataclass
+class SkinData:
+    """A weapon skin from parse_skins()."""
+    def_index: int
+    item_id: int
+    paint_index: int
+    paint_seed: int
+    paint_wear: int
+    steam_id: int
+    custom_name: str = ""
+
+
+@dataclass
+class ItemDrop:
+    """An item drop event from parse_item_drops()."""
+    account_id: int
+    def_index: int
+    drop_reason: int
+    inventory: int
+    item_id: int
+    paint_index: int
+    paint_seed: int
+    paint_wear: int
+    custom_name: str = ""
+
+
+@dataclass
+class GrenadeTrajectory:
+    """A grenade trajectory point from parse_grenades().
+
+    Columns from our fork: grenade_type, grenade_entity_id, x, y, z, tick, steamid, name
+    """
+    tick: int
+    x: float
+    y: float
+    z: float
+    grenade_type: str = ""
+    grenade_entity_id: int = 0
+    thrower_steam_id: int = 0
+    thrower_name: str = ""
+
+
 @dataclass
 class EconomyClassification:
     """Economy classifier output for a round and side."""
@@ -583,3 +700,21 @@ class RoleClassification:
     side: str
     role_code: str
     confidence: float = 0.0
+
+
+@dataclass
+class Classification:
+    """A unified polymorphic classification label for any entity.
+
+    entity_type: which kind of entity ("event", "series", "match", "round", "kill", "player", "team")
+    entity_id:   FK to the classified entity's row
+    label_name:  classification axis (e.g. "buy_type", "archetype", "role", "tier")
+    label_value: classification value (e.g. "full_buy", "fast_exec", "ct_b_anchor", "tier_1")
+    """
+    classifier_run_id: int = 0
+    entity_type: str = ""
+    entity_id: int = 0
+    label_name: str = ""
+    label_value: str = ""
+    confidence: float = 0.0
+    metadata: dict = field(default_factory=dict)
