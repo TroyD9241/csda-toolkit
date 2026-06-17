@@ -1,0 +1,2 @@
+[console_scripts]
+csda = csda_toolkit.cli.main:cli
