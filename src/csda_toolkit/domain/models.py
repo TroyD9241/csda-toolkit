@@ -1,7 +1,7 @@
 """Canonical Python domain models for CS2 demo analysis.
 
-These are the pure domain objects (not DB models). They mirror the
-csda-core domain from the Rust CSDEMOANALYZER project.
+Pure domain objects (not DB models). Covers all event types, tick snapshots,
+and economy state that demoparser2 can extract.
 """
 
 from dataclasses import dataclass, field
@@ -71,6 +71,21 @@ class MatchContext:
 
 
 @dataclass
+class TeamFrame:
+    """Team-level state at a tick."""
+    team_num: int
+    team_name: str
+    clan_name: str = ""
+    score: int = 0
+    score_first_half: int = 0
+    score_second_half: int = 0
+    score_overtime: int = 0
+    num_map_victories: int = 0
+    surrendered: bool = False
+    player_steam_ids: list[int] = field(default_factory=list)
+
+
+@dataclass
 class Match:
     """Canonical match object — the top-level domain entity."""
     map_name: str
@@ -100,67 +115,288 @@ class Round:
     end_reason: Optional[str] = None
     score_t: int = 0
     score_ct: int = 0
+    freeze_end_tick: Optional[int] = None
 
 
-# ── Event models ────────────────────────────────────────────────────────────
+# ── Round event models ──────────────────────────────────────────────────────
+
+
+@dataclass
+class RoundEndReason:
+    """Parsed round_end event."""
+    tick: int
+    winner_side: str
+    reason_code: int
+    reason_name: str
+    message: str = ""
+    player_count: int = 0
+    total_rounds_played: int = 0
+
+
+@dataclass
+class RoundMvp:
+    """Parsed round_mvp event."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+    reason: int = 0
+    value: int = 0
+    musickit_id: int = 0
+
+
+@dataclass
+class WinPanelRound:
+    """Parsed cs_win_panel_round event."""
+    tick: int
+    final_event: int = 0
+    funfact_token: str = ""
+    funfact_player: int = 0
+    funfact_data1: int = 0
+    funfact_data2: int = 0
+    funfact_data3: int = 0
+    show_timer_attack: bool = False
+    show_timer_defend: bool = False
+    timer_time: int = 0
+
+
+@dataclass
+class MatchPanel:
+    """Parsed cs_win_panel_match event."""
+    tick: int
+
+
+# ── Player event models ─────────────────────────────────────────────────────
 
 
 @dataclass
 class Kill:
-    """A kill event."""
-    round_number: int
+    """A kill event — 34 fields from player_death."""
     tick: int
+    round_number: int = 0
     killer_steam_id: Optional[int] = None
     killer_name: str = ""
+    killer_team: str = ""
+    killer_last_place_name: str = ""
     victim_steam_id: Optional[int] = None
     victim_name: str = ""
+    victim_team: str = ""
+    victim_last_place_name: str = ""
     assister_steam_id: Optional[int] = None
-    assister_name: Optional[str] = None
-    weapon_name: str = ""
-    is_headshot: bool = False
-    is_wallbang: bool = False
+    assister_name: str = ""
+    assister_team: str = ""
+    assister_last_place_name: str = ""
+    weapon: str = ""
+    weapon_item_id: str = ""
+    weapon_faux_item_id: str = ""
+    weapon_original_owner_xuid: str = ""
+    headshot: bool = False
+    penetrated: int = 0
+    thrusmoke: bool = False
+    attackerblind: bool = False
+    noscope: bool = False
+    assistedflash: bool = False
+    dominated: bool = False
+    revenge: bool = False
+    wipe: bool = False
+    distance: Optional[float] = None
+    dmg_health: int = 0
+    dmg_armor: int = 0
+    hitgroup: int = -1
 
 
 @dataclass
 class DamageEvent:
-    """A damage event (hit)."""
-    round_number: int
+    """A damage event (player_hurt)."""
+    tick: int
+    round_number: int = 0
+    attacker_steam_id: Optional[int] = None
+    attacker_name: str = ""
+    victim_steam_id: Optional[int] = None
+    victim_name: str = ""
+    weapon: str = ""
+    dmg_health: int = 0
+    dmg_armor: int = 0
+    hitgroup: int = -1
+    health: int = 0
+    armor: int = 0
+    hitgroup_name: str = "unknown"
+
+
+@dataclass
+class PlayerBlind:
+    """A player_blind (flashbang) event."""
     tick: int
     attacker_steam_id: Optional[int] = None
     attacker_name: str = ""
     victim_steam_id: Optional[int] = None
     victim_name: str = ""
-    weapon_name: str = ""
-    damage: int = 0
-    hit_group: Optional[str] = None
-    is_headshot: bool = False
+    blind_duration: float = 0.0
+
+
+@dataclass
+class PlayerSpawn:
+    """A player_spawn event."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+
+
+@dataclass
+class PlayerJump:
+    """A player_jump event."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+
+
+@dataclass
+class FlashAssist:
+    """A flash assist (someone was blinded by your flash)."""
+    tick: int
+    attacker_steam_id: Optional[int] = None
+    attacker_name: str = ""
+    victim_steam_id: Optional[int] = None
+    victim_name: str = ""
+    flash_duration: float = 0.0
+
+
+@dataclass
+class FootstepEvent:
+    """A player_footstep event."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+
+
+@dataclass
+class OtherDeath:
+    """An other_death event (entity death, not a player)."""
+    tick: int
+    attacker_steam_id: Optional[int] = None
+    attacker_name: str = ""
+    attackerblind: bool = False
+    headshot: bool = False
+    noscope: bool = False
+    penetrated: int = 0
+    thrusmoke: bool = False
+    weapon: str = ""
+    othertype: str = ""
+
+
+# ── Weapon event models ─────────────────────────────────────────────────────
+
+
+@dataclass
+class WeaponFire:
+    """A weapon_fire event."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+    weapon: str = ""
+    silenced: bool = False
+
+
+@dataclass
+class WeaponReload:
+    """A weapon_reload event."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+
+
+@dataclass
+class WeaponZoom:
+    """A weapon_zoom event."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+
+
+@dataclass
+class ItemEquip:
+    """An item_equip event (player equips a weapon)."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+    defindex: int = 0
+    item: str = ""
+    canzoom: bool = False
+    hassilencer: bool = False
+    issilenced: bool = False
+    ispainted: bool = False
+    hastracers: bool = False
+    weptype: str = ""
+
+
+@dataclass
+class ItemPickup:
+    """An item_pickup event (player picks up weapon)."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+    item: str = ""
+    defindex: int = 0
+    silent: bool = False
+
+
+# ── Bomb event models ───────────────────────────────────────────────────────
 
 
 @dataclass
 class BombEvent:
-    """A bomb-related event (plant/defuse/explode)."""
-    round_number: int
+    """A bomb-related event."""
     tick: int
-    event_type: str  # plant, defuse, explode
+    event_type: str  # planted, begin_plant, defused, begin_defuse, exploded, dropped, pickup
     player_steam_id: Optional[int] = None
     player_name: str = ""
     site: Optional[str] = None
+    has_kit: Optional[bool] = None
+
+
+# ── Grenade event models ────────────────────────────────────────────────────
 
 
 @dataclass
-class GrenadeEvent:
-    """A grenade detonation event."""
-    round_number: int
+class GrenadeDetonation:
+    """A grenade detonation event (he, flash, smoke)."""
     tick: int
-    thrower_steam_id: Optional[int] = None
-    thrower_name: str = ""
-    grenade_type: str = ""
-    position_x: Optional[float] = None
-    position_y: Optional[float] = None
-    position_z: Optional[float] = None
+    grenade_type: str  # hegrenade, flashbang, smoke, smoke_expired
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+    x: Optional[float] = None
+    y: Optional[float] = None
+    z: Optional[float] = None
 
 
-# ── Economy models ──────────────────────────────────────────────────────────
+@dataclass
+class InfernoEvent:
+    """An inferno (molotov/incendiary) start/expire event."""
+    tick: int
+    event_type: str  # start_burn, expire
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+    x: Optional[float] = None
+    y: Optional[float] = None
+    z: Optional[float] = None
+
+
+# ── Rank / progression models ───────────────────────────────────────────────
+
+
+@dataclass
+class RankUpdate:
+    """A rank_update event."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+    rank_old: int = 0
+    rank_new: int = 0
+    rank_change: int = 0
+    num_wins: int = 0
+    rank_type_id: int = 0
+
+
+# ── Economy models ─────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -174,6 +410,9 @@ class PlayerEquipment:
     armor: bool = False
     helmet: bool = False
     defuse_kit: Optional[bool] = None
+    has_heavy_armor: Optional[bool] = None
+    freezetime_end_value: Optional[int] = None
+    round_start_value: Optional[int] = None
 
 
 @dataclass
@@ -198,6 +437,105 @@ class WeaponDropEvent:
     dropped_by_name: Optional[str] = None
     picked_up_by_steam_id: Optional[int] = None
     picked_up_by_name: Optional[str] = None
+
+
+# ── Tick snapshot models ────────────────────────────────────────────────────
+
+
+@dataclass
+class PlayerFrame:
+    """Complete per-player state snapshot at a single tick.
+
+    Extracted from CCSPlayerController + CCSPlayerPawn fields.
+    """
+    tick: int
+    steam_id: int
+    name: str = ""
+    # Controller-level
+    team_num: int = 0
+    is_alive: bool = False
+    health: int = 0
+    armor: int = 0
+    has_defuser: bool = False
+    has_helmet: bool = False
+    score: int = 0
+    mvps: int = 0
+    ping: int = 0
+    competitive_ranking: int = 0
+    competitive_wins: int = 0
+    clan: str = ""
+    # Pawn-level (positional)
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+    eye_angle_x: float = 0.0
+    eye_angle_y: float = 0.0
+    eye_angle_z: float = 0.0
+    # State
+    is_scoped: bool = False
+    is_walking: bool = False
+    is_defusing: bool = False
+    in_buy_zone: bool = False
+    in_bomb_zone: bool = False
+    shots_fired: int = 0
+    flash_duration: float = 0.0
+    # Movement
+    velocity_modifier: float = 1.0
+    duck_amount: float = 0.0
+    # Equipment values
+    current_equip_value: int = 0
+    freezetime_end_equip_value: int = 0
+    round_start_equip_value: int = 0
+
+
+@dataclass
+class PlayerRoundStats:
+    """Per-player cumulative stats at a tick (from ActionTrackingServices)."""
+    tick: int
+    steam_id: int
+    kills: int = 0
+    assists: int = 0
+    deaths: int = 0
+    damage: int = 0
+    headshot_kills: int = 0
+    cash_earned: int = 0
+    equipment_value: int = 0
+    utility_damage: int = 0
+    enemies_flashed: int = 0
+
+
+@dataclass
+class PlayerMoney:
+    """Per-player money state (from InGameMoneyServices)."""
+    tick: int
+    steam_id: int
+    account: int = 0
+    start_account: int = 0
+    cash_spent_this_round: int = 0
+    total_cash_spent: int = 0
+
+
+@dataclass
+class GameRulesFrame:
+    """CS2 game rules state at a tick."""
+    tick: int
+    total_rounds_played: int = 0
+    round_in_progress: bool = False
+    freezetime: bool = False
+    bomb_planted: bool = False
+    bomb_dropped: bool = False
+    match_started: bool = False
+    warmup: bool = False
+    round_win_status: int = 0
+    round_win_reason: int = 0
+    ct_cant_buy: bool = False
+    t_cant_buy: bool = False
+    ct_timeout_active: bool = False
+    t_timeout_active: bool = False
+    ct_score: int = 0
+    t_score: int = 0
+    is_valve_ds: bool = False
+    is_hltv_active: bool = False
 
 
 # ── Economy classification ──────────────────────────────────────────────────

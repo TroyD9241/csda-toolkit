@@ -1,435 +1,503 @@
-"""High-level DemoParser wrapper for csda-toolkit.
+"""CsdaParser — high-level orchestrator wrapping demoparser2.
 
-Wraps demoparser2.DemoParser to provide clean access to all CS2 demo data
-as typed Python domain objects.
+Usage::
+
+    from csda_toolkit.parsing.parser import CsdaParser
+
+    parser = CsdaParser("demo.dem")
+    
+    # Extract everything
+    header = parser.header()
+    players = parser.players()
+    rounds = parser.rounds()
+    kills = parser.kills()
+    damage = parser.damage()
+    grenades = parser.grenades()
+    bomb_events = parser.bomb_events()
+    weapon_fires = parser.weapon_fires()
+    player_frames = parser.player_frames()  # tick-level state
+    game_rules = parser.game_rules()
 """
 
-from datetime import datetime
-from typing import Optional
+from __future__ import annotations
 
-import pandas as pd
+from pathlib import Path
+from typing import Optional, Sequence
+
 from demoparser2 import DemoParser as Parser2
 
 from csda_toolkit.domain.models import (
     BombEvent,
     DamageEvent,
     DemoFile,
-    GrenadeEvent,
+    FootstepEvent,
+    GameRulesFrame,
+    GrenadeDetonation,
+    InfernoEvent,
+    ItemEquip,
+    ItemPickup,
     Kill,
     Match,
     MatchContext,
-    MatchTeam,
+    MatchPanel,
     Player,
-    PlayerEquipment,
-    PurchaseEvent,
+    PlayerBlind,
+    PlayerFrame,
+    PlayerJump,
+    PlayerMoney,
+    PlayerRoundStats,
+    PlayerSpawn,
+    RankUpdate,
     Round,
-    WeaponDropEvent,
+    RoundEndReason,
+    RoundMvp,
+    WeaponFire,
+    WeaponReload,
+    WeaponZoom,
+    WinPanelRound,
 )
+from csda_toolkit.parsing import events, header as hdr, ticks
 
 
-class DemoParser:
-    """High-level parser wrapping demoparser2.
+class CsdaParser:
+    """High-level parser for CS2 demo files.
 
-    Usage:
-        parser = DemoParser("path/to/demo.dem")
-        match = parser.parse_match()
-        kills = parser.parse_kills()
+    Wraps demoparser2.DemoParser and provides typed access to all 46 game
+    events and 904 tick fields organised by category.
+
+    Most methods are lazy — they parse on first call and cache the result.
     """
 
-    def __init__(self, demo_path: str):
-        self._path = demo_path
-        self._parser = Parser2(demo_path)
+    def __init__(self, demo_path: str | Path):
+        self._path = str(demo_path)
+        self._parser = Parser2(self._path)
 
-    # ── Header / metadata ────────────────────────────────────────────────
+        # Internal caches
+        self._header: dict | None = None
+        self._players: list[Player] | None = None
+        self._rounds: list[Round] | None = None
+        self._kills: list[Kill] | None = None
+        self._damage: list[DamageEvent] | None = None
 
-    def parse_header(self) -> dict:
-        """Return raw demo header data."""
-        return self._parser.parse_header()
+    # ── Property ─────────────────────────────────────────────────────────
+
+    @property
+    def raw(self) -> Parser2:
+        """Access the underlying demoparser2 instance directly."""
+        return self._parser
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # HEADER / METADATA
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def header_raw(self) -> dict:
+        """Return raw header dict from demoparser2."""
+        if self._header is None:
+            self._header = hdr.parse_demo_header(self._parser)
+        return self._header
+
+    def demo_file(self) -> DemoFile:
+        """Return a DemoFile provenance object."""
+        return hdr.parse_demo_file_info(self._parser, self._path)
 
     def map_name(self) -> str:
-        """Return the map name from the demo header."""
-        return self._parser.parse_header().get("map_name", "")
+        return hdr.parse_map_name(self._parser)
 
     def server_name(self) -> str:
-        """Return the server name from the demo header."""
-        return self._parser.parse_header().get("server_name", "")
+        return hdr.parse_server_name(self._parser)
+
+    def game_directory(self) -> str:
+        return hdr.parse_game_directory(self._parser)
+
+    def network_protocol(self) -> int:
+        return hdr.parse_network_protocol(self._parser)
 
     def tick_rate(self) -> int:
-        """Return the tick rate."""
-        try:
-            return int(self._parser.parse_header().get("network_protocol", 0))
-        except (ValueError, TypeError):
-            return 64  # default CS2 tick rate
-
-    def demo_file_info(self) -> DemoFile:
-        """Return a DemoFile with ingestion provenance."""
-        header = self._parser.parse_header()
-        return DemoFile(
-            demo_filename=self._path.split("/")[-1].split("\\")[-1],
-            demo_checksum="",  # computed externally
-            source=header.get("game_directory", "unknown"),
-        )
-
-    # ── Player info ──────────────────────────────────────────────────────
-
-    def parse_players(self) -> list[Player]:
-        """Return all players in the demo."""
-        df = self._parser.parse_player_info()
-        players: list[Player] = []
-        for _, row in df.iterrows():
-            sid = row.get("steamid")
-            if sid and sid > 0:
-                players.append(
-                    Player(steam_id=int(sid), name=str(row.get("name", "")))
-                )
-        return players
-
-    # ── Rounds ───────────────────────────────────────────────────────────
-
-    def _get_freeze_end_ticks(self) -> list[int]:
-        """Get ticks where round_freeze_end fires (CS2 round starts)."""
-        try:
-            df = self._parser.parse_event("round_freeze_end")
-            return df["tick"].tolist()
-        except Exception:
-            return []
-
-    def parse_rounds(self) -> list[Round]:
-        """Derive rounds from round_freeze_end events + game state."""
-        freeze_end_ticks = self._get_freeze_end_ticks()
-        if not freeze_end_ticks:
-            return []
-
-        # Get round counts from ticks
-        df_ticks = self._parser.parse_ticks(
-            ["total_rounds_played"],
-            ticks=freeze_end_ticks,
-        )
-
-        rounds: list[Round] = []
-        for i, tick in enumerate(freeze_end_ticks):
-            mask = df_ticks["tick"] == tick
-            round_data = df_ticks[mask]
-            round_num = int(round_data["total_rounds_played"].iloc[0]) if not round_data.empty else i
-
-            # Get score info from game state
-            rounds.append(
-                Round(
-                    round_number=round_num,
-                    start_tick=tick,
-                    end_tick=freeze_end_ticks[i + 1] if i + 1 < len(freeze_end_ticks) else None,
-                )
-            )
-
-        return rounds
-
-    # ── Kills ────────────────────────────────────────────────────────────
-
-    def parse_kills(self) -> list[Kill]:
-        """Parse all kill events."""
-        df = self._parser.parse_event(
-            "player_death",
-            player=["steamid", "team_name", "last_place_name"],
-            other=["total_rounds_played"],
-        )
-        kills: list[Kill] = []
-        for _, row in df.iterrows():
-            kills.append(
-                Kill(
-                    round_number=int(row.get("total_rounds_played", 0)),
-                    tick=int(row.get("tick", 0)),
-                    killer_steam_id=_int_or_none(row.get("attacker_steamid")),
-                    killer_name=str(row.get("attacker_name", "")),
-                    victim_steam_id=_int_or_none(row.get("user_steamid")),
-                    victim_name=str(row.get("user_name", "")),
-                    assister_steam_id=_int_or_none(row.get("assister_steamid")),
-                    assister_name=str(row.get("assister_name", "")),
-                    weapon_name=str(row.get("weapon", "")),
-                    is_headshot=bool(row.get("headshot", False)),
-                    is_wallbang=False,
-                )
-            )
-        return kills
-
-    # ── Damage ───────────────────────────────────────────────────────────
-
-    def parse_damage(self) -> list[DamageEvent]:
-        """Parse all damage events."""
-        df = self._parser.parse_event(
-            "player_hurt",
-            player=["steamid"],
-            other=["total_rounds_played"],
-        )
-        damage_events: list[DamageEvent] = []
-        for _, row in df.iterrows():
-            damage_events.append(
-                DamageEvent(
-                    round_number=int(row.get("total_rounds_played", 0)),
-                    tick=int(row.get("tick", 0)),
-                    attacker_steam_id=_int_or_none(row.get("attacker_steamid")),
-                    attacker_name=str(row.get("attacker_name", "")),
-                    victim_steam_id=_int_or_none(row.get("user_steamid")),
-                    victim_name=str(row.get("user_name", "")),
-                    weapon_name=str(row.get("weapon", "")),
-                    damage=int(row.get("dmg_health", 0)),
-                    hit_group=str(row.get("hitgroup", "")),
-                    is_headshot=str(row.get("hitgroup", "")) == "head",
-                )
-            )
-        return damage_events
-
-    # ── Bomb events ──────────────────────────────────────────────────────
-
-    def parse_bomb_events(self) -> list[BombEvent]:
-        """Parse bomb plant, defuse, and explode events."""
-        events: list[BombEvent] = []
-
-        for event_name, event_type in [
-            ("bomb_planted", "plant"),
-            ("bomb_defused", "defuse"),
-            ("bomb_exploded", "explode"),
-        ]:
-            try:
-                df = self._parser.parse_event(
-                    event_name,
-                    player=["steamid"],
-                    other=["total_rounds_played"],
-                )
-                for _, row in df.iterrows():
-                    events.append(
-                        BombEvent(
-                            round_number=int(row.get("total_rounds_played", 0)),
-                            tick=int(row.get("tick", 0)),
-                            event_type=event_type,
-                            player_steam_id=_int_or_none(row.get("user_steamid")),
-                            player_name=str(row.get("user_name", "")),
-                            site=str(row.get("site", "")),
-                        )
-                    )
-            except Exception:
-                continue
-
-        return events
-
-    # ── Grenades ─────────────────────────────────────────────────────────
-
-    def parse_grenades(self) -> list[GrenadeEvent]:
-        """Parse grenade trajectory detonation endpoints."""
-        try:
-            df = self._parser.parse_grenades(grenades=True)
-        except Exception:
-            return []
-
-        events: list[GrenadeEvent] = []
-        for _, row in df.iterrows():
-            events.append(
-                GrenadeEvent(
-                    round_number=0,  # Determined externally
-                    tick=int(row.get("tick", 0)),
-                    thrower_steam_id=_int_or_none(row.get("thrower_steamid")),
-                    grenade_type=str(row.get("grenade_type", "")),
-                    position_x=row.get("X"),
-                    position_y=row.get("Y"),
-                    position_z=row.get("Z"),
-                )
-            )
-        return events
-
-    # ── Economy snapshots ────────────────────────────────────────────────
-
-    def parse_equipment_at_freeze_end(self) -> list[PlayerEquipment]:
-        """Parse player equipment at round_freeze_end ticks."""
-        try:
-            freeze_ticks = self._get_freeze_end_ticks()
-        except Exception:
-            return []
-
-        if not freeze_ticks:
-            return []
-
-        df = self._parser.parse_ticks(
-            ["current_equip_value", "total_rounds_played", "has_defuser", "has_helmet"],
-            ticks=freeze_ticks,
-        )
-
-        equipment: list[PlayerEquipment] = []
-        for _, row in df.iterrows():
-            sid = row.get("steamid")
-            if not sid or sid == 0:
-                continue
-            equipment.append(
-                PlayerEquipment(
-                    round_number=int(row.get("total_rounds_played", 0)),
-                    steam_id=int(sid),
-                    player_name=str(row.get("name", "")),
-                    equipment_value=int(row.get("current_equip_value", 0)),
-                    armor=bool(row.get("has_defuser", False)),
-                    helmet=bool(row.get("has_helmet", False)),
-                    defuse_kit=bool(row.get("has_defuser", False)),
-                )
-            )
-        return equipment
-
-    # ── Weapon purchases ─────────────────────────────────────────────────
-
-    def parse_purchases(self) -> list[PurchaseEvent]:
-        """Synthesize purchase events from item_purchase game events."""
-        try:
-            df = self._parser.parse_event(
-                "item_purchase",
-                player=["steamid", "team_name"],
-                other=["total_rounds_played"],
-            )
-        except Exception:
-            return []
-
-        purchases: list[PurchaseEvent] = []
-        for _, row in df.iterrows():
-            purchases.append(
-                PurchaseEvent(
-                    round_number=int(row.get("total_rounds_played", 0)),
-                    tick=int(row.get("tick", 0)),
-                    steam_id=int(row.get("user_steamid", 0)),
-                    player_name=str(row.get("user_name", "")),
-                    weapon_name=str(row.get("weapon", "")),
-                    weapon_category=_weapon_category(str(row.get("weapon", ""))),
-                    cost=0,  # Not available in game event
-                )
-            )
-        return purchases
-
-    # ── Weapon drops ─────────────────────────────────────────────────────
-
-    def parse_item_drops(self) -> list[WeaponDropEvent]:
-        """Parse item drop events."""
-        try:
-            df = self._parser.parse_item_drops()
-        except Exception:
-            return []
-
-        drops: list[WeaponDropEvent] = []
-        for _, row in df.iterrows():
-            drops.append(
-                WeaponDropEvent(
-                    round_number=0,
-                    tick=0,
-                    weapon_name=_defindex_to_weapon(int(row.get("def_index", 0))),
-                )
-            )
-        return drops
-
-    # ── Composite: full match ────────────────────────────────────────────
-
-    def parse_match(self, match_context: Optional[MatchContext] = None) -> Match:
-        """Parse an entire match from the demo."""
-        header = self._parser.parse_header()
-        players = self.parse_players()
-        rounds = self.parse_rounds()
-        kills = self.parse_kills()
-        demo_file = self.demo_file_info()
-
-        match = Match(
-            map_name=header.get("map_name", ""),
-            tick_rate=64,
-            server_name=header.get("server_name", ""),
-            source=header.get("game_directory", "unknown"),
-            demo_file=demo_file,
-            players=players,
-            rounds=rounds,
-            kills=kills,
-            context=match_context,
-        )
-
-        return match
-
-    # ── Raw access ───────────────────────────────────────────────────────
-
-    def raw(self) -> Parser2:
-        """Access the underlying demoparser2 instance."""
-        return self._parser
+        """Estimate tick rate from network protocol (usually 64)."""
+        proto = self.network_protocol()
+        return proto if proto > 0 else 64
 
     def list_game_events(self) -> list[str]:
         """List all available game events in this demo."""
         return self._parser.list_game_events()
 
-    def list_updated_fields(self) -> list[str]:
-        """List all tracked entity fields in this demo."""
+    def list_tick_fields(self) -> list[str]:
+        """List all available tick fields in this demo."""
         return self._parser.list_updated_fields()
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # PLAYERS
+    # ═══════════════════════════════════════════════════════════════════════
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
+    def players(self) -> list[Player]:
+        """Return all players from the demo."""
+        if self._players is not None:
+            return self._players
 
+        df = self._parser.parse_player_info()
+        players: list[Player] = []
+        for _, row in df.iterrows():
+            sid = row.get("steamid")
+            if sid and sid > 0:
+                players.append(Player(steam_id=int(sid), name=str(row.get("name", ""))))
+        self._players = players
+        return players
 
-def _int_or_none(val) -> Optional[int]:
-    """Convert a value to int, returning None if invalid."""
-    if val is None:
-        return None
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return None
+    # ═══════════════════════════════════════════════════════════════════════
+    # ROUNDS
+    # ═══════════════════════════════════════════════════════════════════════
 
+    def _freeze_end_ticks(self) -> list[int]:
+        """Get ticks where round_freeze_end fires (CS2 round starts)."""
+        try:
+            return events.parse_round_freeze_end(
+                self._parser.parse_event("round_freeze_end")
+            )
+        except Exception:
+            return []
 
-def _weapon_category(weapon: str) -> Optional[str]:
-    """Rough weapon categorization."""
-    rifles = {"ak-47", "m4a4", "m4a1-s", "aug", "sg 553", "galil ar", "famas"}
-    smgs = {"mp9", "mp7", "mp5-sd", "mac-10", "p90", "bizon", "ump-45"}
-    pistols = {"usp-s", "glock-18", "p2000", "p250", "five-seven", "tec-9", "cz75-auto", "desert eagle", "revolver"}
-    heavy = {"nova", "xm1014", "mag-7", "m249", "negev"}
-    equipment = {"flashbang", "smoke grenade", "he grenade", "molotov", "incendiary", "decoy", "zeus x27"}
-    awp_set = {"awp"}
-    if weapon.lower() in rifles:
-        return "rifle"
-    if weapon.lower() in awp_set:
-        return "awp"
-    if weapon.lower() in smgs:
-        return "smg"
-    if weapon.lower() in pistols:
-        return "pistol"
-    if weapon.lower() in heavy:
-        return "heavy"
-    if weapon.lower() in equipment:
-        return "equipment"
-    return None
+    def _round_start_ticks(self) -> list[int]:
+        """Get ticks where round_start fires."""
+        try:
+            df = self._parser.parse_event("round_start")
+            return df["tick"].tolist()
+        except Exception:
+            return []
 
+    def rounds(self) -> list[Round]:
+        """Derive rounds from round_freeze_end and round_end events."""
+        if self._rounds is not None:
+            return self._rounds
 
-def _defindex_to_weapon(defindex: int) -> str:
-    """Map item definition index to weapon name."""
-    mapping = {
-        1: "desert eagle",
-        2: "dual berettas",
-        3: "five-seven",
-        4: "glock-18",
-        7: "ak-47",
-        8: "aug",
-        9: "awp",
-        10: "famas",
-        11: "g3sg1",
-        13: "galil ar",
-        14: "m249",
-        16: "m4a4",
-        17: "mac-10",
-        19: "p90",
-        23: "mp5-sd",
-        24: "ump-45",
-        25: "xm1014",
-        26: "pp-bizon",
-        27: "mag-7",
-        28: "negev",
-        29: "sawed-off",
-        30: "tec-9",
-        31: "zeus x27",
-        32: "p2000",
-        33: "mp7",
-        34: "mp9",
-        35: "nova",
-        36: "p250",
-        37: "scar-20",
-        38: "sg 553",
-        39: "ssg 08",
-        40: "m4a1-s",
-        41: "usp-s",
-        42: "cz75-auto",
-        43: "revolver",
-    }
-    return mapping.get(defindex, f"unknown_{defindex}")
+        freeze_ticks = self._freeze_end_ticks()
+        round_end_results = self.round_end_reasons()
+
+        if not freeze_ticks:
+            # Fall back to round_start ticks
+            start_ticks = self._round_start_ticks()
+            rounds_list: list[Round] = []
+            for i, tick in enumerate(start_ticks):
+                rounds_list.append(Round(round_number=i + 1, start_tick=tick))
+            self._rounds = rounds_list
+            return rounds_list
+
+        rounds_list: list[Round] = []
+        for i, freeze_tick in enumerate(freeze_ticks):
+            round_num = i + 1
+            end_tick = freeze_ticks[i + 1] if i + 1 < len(freeze_ticks) else None
+
+            # Find matching round_end
+            rer = None
+            for re in round_end_results:
+                if re.tick >= freeze_tick and (
+                    end_tick is None or re.tick < end_tick
+                ):
+                    rer = re
+                    break
+
+            rounds_list.append(
+                Round(
+                    round_number=round_num,
+                    start_tick=freeze_tick - 1,
+                    freeze_end_tick=freeze_tick,
+                    end_tick=rer.tick if rer else end_tick,
+                    winner_side=rer.winner_side if rer else None,
+                    end_reason=rer.reason_name if rer else None,
+                )
+            )
+
+        self._rounds = rounds_list
+        return rounds_list
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # KILLS (player_death)
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def kills(self) -> list[Kill]:
+        """Parse all kills (player_death events) with full 34-field detail."""
+        if self._kills is not None:
+            return self._kills
+
+        try:
+            df = self._parser.parse_event(
+                "player_death",
+                player=["steamid", "team_name", "last_place_name"],
+                other=["total_rounds_played"],
+            )
+            self._kills = events.parse_player_death(df)
+        except Exception:
+            df = self._parser.parse_event("player_death")
+            self._kills = events.parse_player_death(df)
+
+        return self._kills
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # DAMAGE (player_hurt)
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def damage(self) -> list[DamageEvent]:
+        """Parse all damage events (player_hurt)."""
+        if self._damage is not None:
+            return self._damage
+
+        try:
+            df = self._parser.parse_event(
+                "player_hurt",
+                player=["steamid"],
+                other=["total_rounds_played"],
+            )
+            self._damage = events.parse_player_hurt(df)
+        except Exception:
+            df = self._parser.parse_event("player_hurt")
+            self._damage = events.parse_player_hurt(df)
+
+        return self._damage
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # ROUND EVENT PARSERS
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def round_end_reasons(self) -> list[RoundEndReason]:
+        """Parse round_end events."""
+        try:
+            df = self._parser.parse_event(
+                "round_end",
+                other=["total_rounds_played"],
+            )
+            return events.parse_round_end(df)
+        except Exception:
+            df = self._parser.parse_event("round_end")
+            return events.parse_round_end(df)
+
+    def round_mvps(self) -> list[RoundMvp]:
+        """Parse round_mvp events."""
+        df = self._parser.parse_event("round_mvp")
+        return events.parse_round_mvp(df)
+
+    def win_panel_rounds(self) -> list[WinPanelRound]:
+        """Parse cs_win_panel_round events."""
+        df = self._parser.parse_event("cs_win_panel_round")
+        return events.parse_cs_win_panel_round(df)
+
+    def win_panel_match(self) -> list[MatchPanel]:
+        """Parse cs_win_panel_match events."""
+        df = self._parser.parse_event("cs_win_panel_match")
+        return events.parse_cs_win_panel_match(df)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # PLAYER EVENT PARSERS
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def player_blinds(self) -> list[PlayerBlind]:
+        """Parse player_blind (flashbang) events."""
+        df = self._parser.parse_event("player_blind")
+        return events.parse_player_blind(df)
+
+    def player_spawns(self) -> list[PlayerSpawn]:
+        """Parse player_spawn events."""
+        df = self._parser.parse_event("player_spawn")
+        return events.parse_player_spawn(df)
+
+    def player_jumps(self) -> list[PlayerJump]:
+        """Parse player_jump events."""
+        df = self._parser.parse_event("player_jump")
+        return events.parse_player_jump(df)
+
+    def player_footsteps(self) -> list[FootstepEvent]:
+        """Parse player_footstep events."""
+        df = self._parser.parse_event("player_footstep")
+        return events.parse_player_footstep(df)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # WEAPON EVENT PARSERS
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def weapon_fires(self) -> list[WeaponFire]:
+        """Parse weapon_fire events."""
+        df = self._parser.parse_event("weapon_fire")
+        return events.parse_weapon_fire(df)
+
+    def weapon_reloads(self) -> list[WeaponReload]:
+        """Parse weapon_reload events."""
+        df = self._parser.parse_event("weapon_reload")
+        return events.parse_weapon_reload(df)
+
+    def weapon_zooms(self) -> list[WeaponZoom]:
+        """Parse weapon_zoom events."""
+        df = self._parser.parse_event("weapon_zoom")
+        return events.parse_weapon_zoom(df)
+
+    def item_equips(self) -> list[ItemEquip]:
+        """Parse item_equip events."""
+        df = self._parser.parse_event("item_equip")
+        return events.parse_item_equip(df)
+
+    def item_pickups(self) -> list[ItemPickup]:
+        """Parse item_pickup events."""
+        df = self._parser.parse_event("item_pickup")
+        return events.parse_item_pickup(df)
+
+    def bullet_details(self) -> list[dict]:
+        """Return raw fire_bullets data (shot-level bullet detail)."""
+        df = self._parser.parse_event("fire_bullets")
+        return events.parse_fire_bullets(df)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # BOMB EVENT PARSERS
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def bomb_events(self) -> list[BombEvent]:
+        """Parse all bomb-related events (plant, defuse, explode, etc.)."""
+        events_list: list[BombEvent] = []
+        try:
+            events_list.extend(events.parse_bomb_planted(self._parser.parse_event("bomb_planted")))
+        except Exception: pass
+        try:
+            events_list.extend(events.parse_bomb_beginplant(self._parser.parse_event("bomb_beginplant")))
+        except Exception: pass
+        try:
+            events_list.extend(events.parse_bomb_defused(self._parser.parse_event("bomb_defused")))
+        except Exception: pass
+        try:
+            events_list.extend(events.parse_bomb_begindefuse(self._parser.parse_event("bomb_begindefuse")))
+        except Exception: pass
+        try:
+            events_list.extend(events.parse_bomb_exploded(self._parser.parse_event("bomb_exploded")))
+        except Exception: pass
+        try:
+            events_list.extend(events.parse_bomb_dropped(self._parser.parse_event("bomb_dropped")))
+        except Exception: pass
+        try:
+            events_list.extend(events.parse_bomb_pickup(self._parser.parse_event("bomb_pickup")))
+        except Exception: pass
+        events_list.sort(key=lambda e: e.tick)
+        return events_list
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # GRENADE / INFERNO PARSERS
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def grenades(self) -> list[GrenadeDetonation]:
+        """Parse all grenade detonation events."""
+        events_list: list[GrenadeDetonation] = []
+        try:
+            events_list.extend(events.parse_hegrenade_detonate(self._parser.parse_event("hegrenade_detonate")))
+        except Exception: pass
+        try:
+            events_list.extend(events.parse_flashbang_detonate(self._parser.parse_event("flashbang_detonate")))
+        except Exception: pass
+        try:
+            events_list.extend(events.parse_smokegrenade_detonate(self._parser.parse_event("smokegrenade_detonate")))
+        except Exception: pass
+        try:
+            events_list.extend(events.parse_smokegrenade_expired(self._parser.parse_event("smokegrenade_expired")))
+        except Exception: pass
+        events_list.sort(key=lambda e: e.tick)
+        return events_list
+
+    def inferno_events(self) -> list[InfernoEvent]:
+        """Parse molotov/incendiary start and expire events."""
+        events_list: list[InfernoEvent] = []
+        try:
+            events_list.extend(events.parse_inferno_startburn(self._parser.parse_event("inferno_startburn")))
+        except Exception: pass
+        try:
+            events_list.extend(events.parse_inferno_expire(self._parser.parse_event("inferno_expire")))
+        except Exception: pass
+        events_list.sort(key=lambda e: e.tick)
+        return events_list
+
+    def grenade_trajectories(self) -> dict:
+        """Return raw grenade trajectory data (from parse_grenades)."""
+        try:
+            return self._parser.parse_grenades(grenades=True).to_dict(orient="records")
+        except Exception:
+            return {}
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # RANK / PROGRESSION
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def rank_updates(self) -> list[RankUpdate]:
+        """Parse rank_update events."""
+        df = self._parser.parse_event("rank_update")
+        return events.parse_rank_update(df)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # TICK-LEVEL STATE
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def player_frames(self, ticks: Optional[Sequence[int]] = None) -> list[PlayerFrame]:
+        """Extract per-player world state at given ticks (or all ticks)."""
+        return ticks.extract_player_frames(self._parser, ticks)
+
+    def player_controller_frames(self, ticks: Optional[Sequence[int]] = None) -> list[PlayerFrame]:
+        """Extract controller-level data (team, identity, alive status)."""
+        return ticks.extract_controller_frames(self._parser, ticks)
+
+    def player_round_stats(self, ticks: Optional[Sequence[int]] = None) -> list[PlayerRoundStats]:
+        """Extract per-round cumulative stats from ActionTrackingServices."""
+        return ticks.extract_player_round_stats(self._parser, ticks)
+
+    def player_money(self, ticks: Optional[Sequence[int]] = None) -> list[PlayerMoney]:
+        """Extract per-player money state."""
+        return ticks.extract_player_money(self._parser, ticks)
+
+    def game_rules(self, ticks: Optional[Sequence[int]] = None) -> list[GameRulesFrame]:
+        """Extract CS2 game rules state at given ticks."""
+        return ticks.extract_game_rules(self._parser, ticks)
+
+    def combined_player_state(self, ticks: Optional[Sequence[int]] = None) -> dict[int, PlayerFrame]:
+        """Get combined player state (pawn + controller) keyed by steam_id."""
+        return ticks.extract_all_player_state(self._parser, ticks)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # EQUIPMENT / ECONOMY HELPERS
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def player_equipment_at_freezetime(self) -> list[dict]:
+        """Return equipment value snapshots at freeze-end ticks."""
+        freeze_ticks = self._freeze_end_ticks()
+        if not freeze_ticks:
+            return []
+        df = self._parser.parse_ticks(
+            ["m_unCurrentEquipmentValue", "m_unFreezetimeEndEquipmentValue"],
+            ticks=freeze_ticks,
+        )
+        records = df.to_dict(orient="records")
+        round_map = {ft: i + 1 for i, ft in enumerate(freeze_ticks)}
+        for r in records:
+            r["round_number"] = round_map.get(r.get("tick", 0), 0)
+        return records
+
+    def item_drops(self) -> list[dict]:
+        """Return raw item_drops data."""
+        try:
+            return self._parser.parse_item_drops().to_dict(orient="records")
+        except Exception:
+            return []
+
+    def skins(self) -> list[dict]:
+        """Return parsed skin data."""
+        try:
+            return self._parser.parse_skins().to_dict(orient="records")
+        except Exception:
+            return []
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # COMPOSITE — full match
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def parse_match(self, match_context: Optional[MatchContext] = None) -> Match:
+        """Parse an entire match — header + players + rounds + kills."""
+        return Match(
+            map_name=self.map_name(),
+            tick_rate=self.tick_rate(),
+            server_name=self.server_name(),
+            source=self.game_directory(),
+            demo_file=self.demo_file(),
+            players=self.players(),
+            rounds=self.rounds(),
+            kills=self.kills(),
+            context=match_context,
+        )

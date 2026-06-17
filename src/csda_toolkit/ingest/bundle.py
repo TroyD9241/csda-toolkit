@@ -37,7 +37,7 @@ from csda_toolkit.domain.models import (
     PlayerEquipment,
     PurchaseEvent,
 )
-from csda_toolkit.parsing.parser import DemoParser
+from csda_toolkit.parsing.parser import CsdaParser
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class IngestBundle:
     def __init__(self, db: Database, demo_path: str):
         self.db = db
         self.demo_path = demo_path
-        self._parser = DemoParser(demo_path)
+        self._parser = CsdaParser(demo_path)
 
     def run(self) -> IngestResult:
         """Execute the full ingest pipeline."""
@@ -166,46 +166,46 @@ class IngestBundle:
                     assister_steam_id=kd.assister_steam_id,
                     assister_player_id=assister_id,
                     assister_name=kd.assister_name,
-                    weapon_name=kd.weapon_name,
-                    is_headshot=kd.is_headshot,
-                    is_wallbang=kd.is_wallbang,
+                    weapon_name=kd.weapon,
+                    is_headshot=kd.headshot,
+                    is_wallbang=bool(kd.penetrated > 0),
                 )
                 session.add(kill_model)
                 result.kills_created += 1
 
             # 10. Persist round equipment if available
             try:
-                equipment_list = self._parser.parse_equipment_at_freeze_end()
+                equipment_list = self._parser.player_equipment_at_freezetime()
                 for eq in equipment_list:
+                    sid = eq.get("steamid", 0)
                     eq_model = RoundEquipment(
                         match_id=match_model.id,
-                        round_number=eq.round_number,
-                        steam_id=eq.steam_id,
-                        player_id=player_map.get(eq.steam_id),
-                        player_name=eq.player_name,
-                        equipment_value=eq.equipment_value,
-                        armor=eq.armor,
-                        helmet=eq.helmet,
-                        defuse_kit=eq.defuse_kit or False,
+                        round_number=eq.get("round_number", 0),
+                        steam_id=sid,
+                        player_id=player_map.get(sid),
+                        player_name=eq.get("name", ""),
+                        equipment_value=eq.get("m_unCurrentEquipmentValue", 0),
+                        armor=False,
+                        helmet=False,
+                        defuse_kit=False,
                     )
                     session.add(eq_model)
             except Exception as e:
                 logger.warning("Equipment parsing failed (non-fatal): %s", e)
 
-            # 11. Persist purchases if available
+            # 11. Persist purchases if available (from item_purchase events)
             try:
-                purchase_list = self._parser.parse_purchases()
-                for pu in purchase_list:
+                df = self._parser.raw.parse_event("item_purchase", player=["steamid", "team_name"], other=["total_rounds_played"])
+                for _, row in df.iterrows():
+                    sid = int(row.get("user_steamid", 0))
                     pu_model = RoundPurchase(
                         match_id=match_model.id,
-                        round_number=pu.round_number,
-                        tick=pu.tick,
-                        steam_id=pu.steam_id,
-                        player_id=player_map.get(pu.steam_id),
-                        player_name=pu.player_name,
-                        weapon_name=pu.weapon_name,
-                        weapon_category=pu.weapon_category,
-                        cost=pu.cost,
+                        round_number=int(row.get("total_rounds_played", 0)),
+                        tick=int(row.get("tick", 0)),
+                        steam_id=sid,
+                        player_id=player_map.get(sid),
+                        player_name=str(row.get("user_name", "")),
+                        weapon_name=str(row.get("weapon", "")).replace("weapon_", ""),
                     )
                     session.add(pu_model)
             except Exception as e:
