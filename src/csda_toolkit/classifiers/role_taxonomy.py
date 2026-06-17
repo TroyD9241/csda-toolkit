@@ -380,10 +380,10 @@ ROLE_POSITION_PREFERENCES: dict[str, dict[str, list[str]]] = {
     # Broad role → { map: [preferred positions] }
     "entry": {
         "dust2":   ["short_a", "b_tunnels", "mid"],
-        "mirage":  ["apartments", "palace", "short"],
+        "mirage":  ["apartments", "a_site", "palace"],
         "inferno": ["apartments", "banana"],
         "nuke":    ["outside", "squeaky"],
-        "overpass":["bathrooms", "water", "short"],
+        "overpass":["bathrooms", "a_site", "water"],
         "ancient": ["long_a", "b_ramp", "donut"],
     },
     "igl": {
@@ -391,20 +391,20 @@ ROLE_POSITION_PREFERENCES: dict[str, dict[str, list[str]]] = {
         "mirage":  ["mid", "connector"],
         "inferno": ["mid", "a_site"],
         "nuke":    ["outside", "ramp"],
-        "overpass":["connector", "mid"],
-        "ancient": ["donut", "mid"],
+        "overpass":["connector", "monster"],
+        "ancient": ["donut", "cave"],
     },
     "awper": {
         "dust2":   ["long_a", "mid", "b_tunnels"],
-        "mirage":  ["mid", "long_a", "a_site"],
+        "mirage":  ["mid", "a_site", "connector"],
         "inferno": ["banana", "a_site"],
         "nuke":    ["outside", "a_site_upper"],
-        "overpass":["a_site", "mid", "connector"],
+        "overpass":["a_site", "monster", "connector"],
         "ancient": ["long_a", "donut", "b_ramp"],
     },
     "lurker": {
         "dust2":   ["mid", "lower_tunnels", "long_a"],
-        "mirage":  ["mid", "underpass", "b_site"],
+        "mirage":  ["mid", "apartments", "b_site"],
         "inferno": ["mid", "apartments"],
         "nuke":    ["outside", "b_site_lower"],
         "overpass":["water", "monster", "b_site"],

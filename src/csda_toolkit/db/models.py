@@ -286,7 +286,7 @@ class Event(Base):
     source: Mapped[str] = mapped_column(Text, default="unknown")
     start_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     end_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    metadata: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
+    extra_data: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -697,7 +697,7 @@ class Classification(Base):
     label_name: Mapped[str] = mapped_column(Text)
     label_value: Mapped[str] = mapped_column(Text)
     confidence: Mapped[Optional[float]] = mapped_column(Numeric(4, 3), nullable=True)
-    metadata: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
+    extra_data: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
