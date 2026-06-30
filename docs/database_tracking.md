@@ -119,9 +119,10 @@ In our 3 ingested demos: dust2 has 16 real events (heuristic skipped); mirage an
 - [x] Add compact grenade trajectory summary (12 points/throw vs raw)
 - [x] Add batch event tables (weapon_fire, player_spawn, etc.)
 - [x] PRS column types widened (SMALLINT → INTEGER)
-- [ ] **Fix match_players NULL team_side for players inactive in round 0**
-- [ ] Populate `match_teams.score` and `match_teams.is_winner` from match results
-- [ ] Populate `player_blinds.victim_name` from players table
+- [x] **Fix match_players NULL team_side for players inactive in round 0**
+- [x] Populate `match_teams.score` and `match_teams.is_winner` from match results
+- [x] Populate `player_blinds.victim_name` from players table
+- [x] Run classifier pipeline → populated 7 tables (30 role snapshots, 10 career profiles, 272 round classifications, 1360 keyframes, 680 movement summaries, etc.)
 
 ### Medium-term
 - [ ] Run classifier pipeline (`scripts/run_classifiers.py`) to populate classification tables
@@ -160,4 +161,3 @@ In our 3 ingested demos: dust2 has 16 real events (heuristic skipped); mirage an
 ## External References (for future use)
 
 - [cs-demo-manager CLI docs](https://cs-demo-manager.com/docs/cli) � A reference for CS2 demo CLI tooling. Useful for cross-checking our demoparser2-based ingest against an independent implementation, and for discovering event types/columns we may be missing.
-
