@@ -128,6 +128,15 @@ pytest tests/ -v
 
 ## Recent Work
 
+- **Ingest 3 demos** (mirage, dust2, nuke) via IngestBundle
+- **SHA256 idempotency** (prevents duplicate ingestion)
+- **PlayerBlind proximity heuristic fallback** (with `is_heuristic` flag to distinguish real vs estimated)
+- **Compact grenade trajectory summary** (12 points/throw vs raw, 99.95% size reduction)
+- **Batch event tables** (weapon_fire, player_spawn, etc.)
+- **PRS column types widened** (SMALLINT → INTEGER)
+- **Fix match_players NULL team_side** for players inactive in round 0 (also checks assists, falls back to round 1, then majority)
+- **Populate match_teams.score and match_teams.is_winner** from round wins
+- **Populate player_blinds.victim_name** from players table
 - **HLTV 3.0 rating baseline**: Implemented match-level rating with eKAST fix, K-D from Kill table, traded detection, and PRS-based ADR
 - **PRS snapshot timing fix**: Added `round_end_ticks` parameter to `extract_player_round_stats` for future re-ingestion
 - **Self-damage filter utility**: Added `is_utility_weapon()` and `compute_utility_dmg_to_opponents()` helpers in `hltv_rating.py` for filtered utility damage
