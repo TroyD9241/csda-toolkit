@@ -12,7 +12,7 @@
 
 ## Fork
 
-The parser fork lives at: `C:\Users\Troy\demoparser\`
+The parser fork lives at the project's sibling `demoparser/` directory.
 GitHub: `https://github.com/TroyD9241/demoparser`
 
 **Future intent**: We will actively extend this fork to expose additional data points, improve event coverage, and add new parsing capabilities beyond what the upstream `LaihoE/demoparser` provides. The fork is the foundation — everything in this toolkit depends on it.
