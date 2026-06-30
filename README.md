@@ -134,6 +134,17 @@ pytest tests/ -v
 - **Compact grenade trajectory summary** (12 points/throw vs raw, 99.95% size reduction)
 - **Batch event tables** (weapon_fire, player_spawn, etc.)
 - **PRS column types widened** (SMALLINT → INTEGER)
+
+### Bug Fixes
+
+- **Fix `match_players` NULL `team_side`**: Players inactive in round 0 (no kill/death) previously got NULL. Now checks assists, falls back to round 1, then assigns majority side.
+- **Fix `match_teams.score` / `is_winner` NULL**: Computed from round wins (`COUNT(winner_side='ct'/'t')`) since demoparser's `round.score_t/score_ct` are 0 in our demos.
+- **Fix `player_blinds.victim_name` empty**: Now looked up from `players.last_known_name` via raw SQL (avoids session caching). Applied in both real ingest and proximity heuristic.
+- **SHA256 idempotency** (prevents duplicate ingestion)
+- **PlayerBlind proximity heuristic fallback** (with `is_heuristic` flag to distinguish real vs estimated)
+- **Compact grenade trajectory summary** (12 points/throw vs raw, 99.95% size reduction)
+- **Batch event tables** (weapon_fire, player_spawn, etc.)
+- **PRS column types widened** (SMALLINT → INTEGER)
 - **Fix match_players NULL team_side** for players inactive in round 0 (also checks assists, falls back to round 1, then majority)
 - **Populate match_teams.score and match_teams.is_winner** from round wins
 - **Populate player_blinds.victim_name** from players table
