@@ -30,6 +30,14 @@ Schema: `(match_id, team_slot, round_number) → side` (`"CT"` or `"T"`)
 ### Q: What is `team_memberships`?
 **Roster history per team.** Tracks when players joined/left a team org, with `membership_type` (e.g., "starter", "sub", "standin"), `confidence` (0-1), and `source` (e.g., "hltv", "manual"). Currently empty — would be populated by the HLTV adapter scraping team rosters. Not per-match.
 
+### Q: How do I know if a `player_blinds` row is real or estimated?
+Check the `is_heuristic` column:
+- `is_heuristic = false` → real demoparser event
+- `is_heuristic = true` → proximity-heuristic estimate (demoparser emitted 0 events for this match)
+
+In our 3 ingested demos: dust2 has 16 real events (heuristic skipped); mirage and nuke had 0 real events so the heuristic filled in 199+155=354 estimates. The heuristic is ~70-85% accurate (no FOV check, no wall check, no prior flash stack).
+
+
 ---
 
 ## Empty Tables (Reason / Action Needed)

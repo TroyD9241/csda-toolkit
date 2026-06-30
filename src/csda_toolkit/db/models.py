@@ -1075,7 +1075,11 @@ class BombEvent(Base):
 
 
 class PlayerBlind(Base):
-    """Flashbang blind events (player_blind)."""
+    """Flashbang blind events (player_blind).
+
+    `is_heuristic` distinguishes real demoparser events from proximity-heuristic
+    estimates (used when demoparser emits 0 events for a match).
+    """
     __tablename__ = "player_blinds"
     __table_args__ = (
         Index("ix_blind_match_tick", "match_id", "tick"),
@@ -1092,6 +1096,7 @@ class PlayerBlind(Base):
     victim_steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     victim_name: Mapped[str] = mapped_column(Text)
     blind_duration: Mapped[float] = mapped_column(Numeric(6, 3))
+    is_heuristic: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

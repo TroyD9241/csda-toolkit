@@ -1394,6 +1394,7 @@ class IngestBundle:
                     victim_steam_id=victim_sid,
                     victim_name=self._victim_name_cache[victim_sid],
                     blind_duration=round(dur, 2),
+                    is_heuristic=True,
                 ))
                 inserted += 1
 
