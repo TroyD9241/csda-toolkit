@@ -148,3 +148,8 @@ Schema: `(match_id, team_slot, round_number) â†’ side` (`"CT"` or `"T"`)
 | recent | FIXED | PlayerBlind 0 events from demoparser (proximity heuristic) | RESOLVED |
 | recent | FIXED | GrenadeTrajectory per-tick storage too large (compact summary) | RESOLVED (99.95% size reduction) |
 | recent | FIXED | Duplicate demo ingestion (no idempotency) | RESOLVED (SHA256 check) |
+
+## External References (for future use)
+
+- [cs-demo-manager CLI docs](https://cs-demo-manager.com/docs/cli) — A reference for CS2 demo CLI tooling. Useful for cross-checking our demoparser2-based ingest against an independent implementation, and for discovering event types/columns we may be missing.
+
