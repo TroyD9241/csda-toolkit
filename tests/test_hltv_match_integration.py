@@ -94,7 +94,7 @@ def main():
     print("=== Match-Level HLTV 3.0 Rating Test (Map 1: Mirage) ===\n")
 
     with db.session() as session:
-        match_id = 1
+        match_id = 14  # mirage (newest match in DB after re-ingest)
         kills = session.execute(select(Kill).where(Kill.match_id == match_id).order_by(Kill.tick)).scalars().all()
         rounds = session.execute(select(Round).where(Round.match_id == match_id).order_by(Round.round_number)).scalars().all()
         player_stats = session.execute(select(PlayerRoundStats).where(PlayerRoundStats.match_id == match_id)).scalars().all()
