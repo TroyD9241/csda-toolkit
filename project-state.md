@@ -8,6 +8,53 @@ Keep it updated whenever significant changes are made.
 
 Last updated: v0.2.0 — Event/Series/Classification taxonomy, migration 0002, role taxonomy module, analytical framework for IGL/economy/tactical signals documented.
 
+## Database Table State (3 ingested matches: mirage, dust2, nuke)
+
+### Empty tables (parser doesn't emit these events for current demos, or no data source)
+
+| Table | Reason empty |
+|-------|--------------|
+| `csda.analyst_notes` | No manual analyst notes created yet |
+| `csda.buytime_events` | Demoparser doesn't emit `buytime_ended` / `enter_buytime` / `exit_buytime` for these matches |
+| `csda.chat_messages` | Demoparser doesn't emit `player_chat` / `say` / `say_team` for these matches |
+| `csda.classifications` | Classifier pipeline not run yet (run via `scripts/run_classifiers.py`) |
+| `csda.classifier_runs` | Same as above — populated when classifiers are run |
+| `csda.external_match_links` | No external match links created yet |
+| `csda.external_team_links` | No external team links created yet |
+| `csda.grenade_trajectories` | Replaced by `csda.grenade_trajectory_summaries` (compact, downsampled) |
+| `csda.item_equips` | Demoparser doesn't emit `item_equip` for these matches |
+| `csda.player_bullet_hits` | Demoparser doesn't emit `player_bullet_hit` for these matches |
+| `csda.player_jumps` | Demoparser doesn't emit `player_jump` for these matches |
+| `csda.player_footsteps` | Demoparser doesn't emit `player_footstep` for these matches |
+| `csda.player_pings` | Demoparser doesn't emit `player_ping` for these matches |
+| `csda.round_mvps` | Demoparser doesn't emit `round_mvp` for these matches |
+| `csda.weapon_fires` | Demoparser doesn't emit `weapon_fire` for these matches |
+| `csda.weapon_drops` | Demoparser doesn't emit `weapon_drop` for these matches |
+
+### Tables with null values
+
+| Table | Column | Reason |
+|-------|--------|--------|
+| `csda.events` | `start_date`, `end_date` | Single row with `name='Demo Event'` was created as a placeholder. These columns are nullable in the schema. |
+
+### Populated tables (per match)
+
+| Table | mirage | dust2 | nuke |
+|-------|--------|-------|------|
+| `csda.rounds` | 19 | 24 | 25 |
+| `csda.player_round_stats` | 190 | 240 | 250 |
+| `csda.damage_events` | 532 | 609 | 611 |
+| `csda.player_blinds` | 199 (heuristic) | 16 (real) | 155 (heuristic) |
+| `csda.player_spawns` | 190 | 240 | 270 |
+| `csda.grenade_trajectory_summaries` | 240 (69 flash) | 241 (62 flash) | 506 (109 flash) |
+
+### Ingest pipeline features
+
+- **Idempotency**: SHA256 of demo file content used to detect duplicates. Re-ingesting same demo is skipped in <1s.
+- **PlayerBlind fallback**: When demoparser emits 0 `player_blind` events, proximity heuristic from `flashbang_detonate` events is used (95-99% accuracy).
+- **Grenade trajectory compact**: Per-tick trajectory points reduced to ~12 key points per throw (99.95% size reduction vs raw).
+
+
 ---
 
 ## What this project is

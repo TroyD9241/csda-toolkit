@@ -29,6 +29,8 @@ from demoparser2 import DemoParser as Parser2
 
 from csda_toolkit.domain.models import (
     BombEvent,
+    BuyTimeEvent,
+    ChatMessage,
     DamageEvent,
     DemoFile,
     FootstepEvent,
@@ -47,9 +49,11 @@ from csda_toolkit.domain.models import (
     OtherDeath,
     Player,
     PlayerBlind,
+    PlayerBulletHit,
     PlayerFrame,
     PlayerJump,
     PlayerMoney,
+    PlayerPing,
     PlayerRoundStats,
     PlayerSpawn,
     RankUpdate,
@@ -59,6 +63,7 @@ from csda_toolkit.domain.models import (
     RoundStartEvent,
     SkinData,
     TickEvent,
+    WeaponDropEvent,
     WeaponFire,
     WeaponReload,
     WeaponZoom,
@@ -433,6 +438,60 @@ class CsdaParser:
         except Exception:
             return []
 
+    def grenade_trajectory_summaries(self) -> list[dict]:
+        """Return per-grenade compact trajectory summaries (downsampled).
+
+        Groups raw per-tick trajectory points by grenade_entity_id and
+        applies downsampling (keep first/last, sample middle). One dict
+        per grenade throw, not per trajectory point.
+        """
+        from csda_toolkit.parsing.trajectory import compact_trajectory
+        import bisect
+        try:
+            df = self._parser.parse_grenades(grenades=True)
+            raw_points = events.parse_grenade_trajectories(df)
+        except Exception:
+            return []
+        # Group by grenade_entity_id
+        by_entity: dict[int, list] = {}
+        for p in raw_points:
+            by_entity.setdefault(p.grenade_entity_id, []).append(p)
+        results = []
+        # Pre-fetch rounds for round_number lookup
+        try:
+            rounds = self.rounds()
+        except Exception:
+            rounds = []
+        for entity_id, pts in by_entity.items():
+            pts.sort(key=lambda p: p.tick)
+            grenade_type = pts[0].grenade_type if pts else ""
+            point_dicts = [
+                {"tick": p.tick, "x": float(p.x), "y": float(p.y), "z": float(p.z)}
+                for p in pts
+            ]
+            compact = compact_trajectory(point_dicts, grenade_type=grenade_type)
+            if not compact:
+                continue
+            compact["grenade_entity_id"] = entity_id
+            compact["grenade_type"] = grenade_type
+            # Compute round_number via bisect on round starts
+            if rounds:
+                starts = [r.start_tick for r in rounds if r.start_tick is not None]
+                nums = [r.round_number for r in rounds if r.start_tick is not None]
+                if starts:
+                    idx = bisect.bisect_right(starts, pts[0].tick) - 1
+                    compact["round_number"] = nums[idx] if 0 <= idx < len(nums) else 0
+                else:
+                    compact["round_number"] = 0
+            else:
+                compact["round_number"] = 0
+            compact["thrower_steam_id"] = pts[0].thrower_steam_id
+            compact["thrower_name"] = pts[0].thrower_name or ""
+            compact["team"] = ""
+            compact["is_flash"] = "flash" in grenade_type.lower()
+            results.append(compact)
+        return results
+
     # ═══════════════════════════════════════════════════════════════════════
     # RANK / PROGRESSION
     # ═══════════════════════════════════════════════════════════════════════
@@ -441,6 +500,59 @@ class CsdaParser:
         """Parse rank_update events."""
         df = self._event_df("rank_update")
         return events.parse_rank_update(df)
+
+    # ── Additional batch events (weapon_fire, bullet_hit, chat, pings, drops) ─
+
+    def player_bullet_hits(self) -> list[PlayerBulletHit]:
+        """Parse player_bullet_hit events (where bullets land)."""
+        try:
+            return events.parse_player_bullet_hit(self._event_df("player_bullet_hit"))
+        except Exception:
+            return []
+
+    def chat_messages(self) -> list[ChatMessage]:
+        """Parse chat events: player_chat, say, say_team."""
+        all_msgs = []
+        for ev_name in ("player_chat", "say_team", "say"):
+            try:
+                msgs = events.parse_chat_message(self._event_df(ev_name))
+                if ev_name == "say_team":
+                    for m in msgs:
+                        m.team_only = True
+                all_msgs.extend(msgs)
+            except Exception:
+                pass
+        return all_msgs
+
+    def player_pings(self) -> list[PlayerPing]:
+        """Parse player_ping and player_ping_world events."""
+        all_pings = []
+        for ev_name, is_world in (("player_ping", False), ("player_ping_world", True)):
+            try:
+                pings = events.parse_player_ping(self._event_df(ev_name))
+                for p in pings:
+                    p.is_world_ping = is_world
+                all_pings.extend(pings)
+            except Exception:
+                pass
+        return all_pings
+
+    def weapon_drops(self) -> list[WeaponDropEvent]:
+        """Parse weapon_drop events (dropped_by / picked_up_by)."""
+        try:
+            return events.parse_weapon_drop(self._event_df("weapon_drop"))
+        except Exception:
+            return []
+
+    def buytime_events(self) -> list[BuyTimeEvent]:
+        """Parse buytime_ended, enter_buytime, exit_buytime."""
+        all_events = []
+        for ev_name in ("buytime_ended", "enter_buytime", "exit_buytime"):
+            try:
+                all_events.extend(events.parse_buytime_event(self._event_df(ev_name), ev_name))
+            except Exception:
+                pass
+        return all_events
 
     # ═══════════════════════════════════════════════════════════════════════
     # TICK MARKER / MISC EVENTS

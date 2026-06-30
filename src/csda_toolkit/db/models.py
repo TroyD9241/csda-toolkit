@@ -117,8 +117,20 @@ class Match(Base):
     grenade_detonations: Mapped[list["GrenadeDetonation"]] = relationship(back_populates="match")
     inferno_events: Mapped[list["InfernoEvent"]] = relationship(back_populates="match")
     grenade_trajectories: Mapped[list["GrenadeTrajectory"]] = relationship(back_populates="match")
+    grenade_trajectory_summaries: Mapped[list["GrenadeTrajectorySummary"]] = relationship(back_populates="match")
     player_round_stats: Mapped[list["PlayerRoundStats"]] = relationship(back_populates="match")
     bomb_events: Mapped[list["BombEvent"]] = relationship(back_populates="match")
+    weapon_fires: Mapped[list["WeaponFire"]] = relationship(back_populates="match")
+    player_bullet_hits: Mapped[list["PlayerBulletHit"]] = relationship(back_populates="match")
+    player_spawns: Mapped[list["PlayerSpawn"]] = relationship(back_populates="match")
+    player_jumps: Mapped[list["PlayerJump"]] = relationship(back_populates="match")
+    player_footsteps: Mapped[list["PlayerFootstep"]] = relationship(back_populates="match")
+    chat_messages: Mapped[list["ChatMessage"]] = relationship(back_populates="match")
+    round_mvps: Mapped[list["RoundMVP"]] = relationship(back_populates="match")
+    item_equips: Mapped[list["ItemEquip"]] = relationship(back_populates="match")
+    player_pings: Mapped[list["PlayerPing"]] = relationship(back_populates="match")
+    buytime_events: Mapped[list["BuyTimeEvent"]] = relationship(back_populates="match")
+    weapon_drops: Mapped[list["WeaponDrop"]] = relationship(back_populates="match")
     player_round_keyframes: Mapped[list["PlayerRoundKeyframe"]] = relationship(
         back_populates="match"
     )
@@ -857,7 +869,7 @@ class RoundPurchase(Base):
 
 class WeaponDrop(Base):
     __tablename__ = "weapon_drops"
-    __table_args__ = {"schema": "csda"}
+    __table_args__ = {"schema": "csda", "extend_existing": True}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[int] = mapped_column(
@@ -1180,6 +1192,223 @@ class GrenadeTrajectory(Base):
     match: Mapped["Match"] = relationship(back_populates="grenade_trajectories")
 
 
+class GrenadeTrajectorySummary(Base):
+    """Compact summary of a grenade's flight path (downsampled to ~12 key points).
+
+    Replaces per-tick storage with a compact representation suitable for
+    flash proximity/blind estimation, utility analysis, and Swing credit.
+    One row per grenade throw (not per trajectory point).
+
+    Fields:
+      - throw_tick / detonate_tick: flight timing
+      - throw_pos_* / detonate_pos_*: positions (cm precision)
+      - trajectory_points: JSON array of {"tick","x","y","z"} (downsampled)
+      - max_distance: farthest point from throw (Hammer units)
+      - duration_ticks: flight duration
+      - is_flash: convenience flag for flashbang queries
+    """
+    __tablename__ = "grenade_trajectory_summaries"
+    __table_args__ = (
+        Index("ix_gts_match_thrower", "match_id", "thrower_steam_id"),
+        Index("ix_gts_match_round", "match_id", "round_number"),
+        {"schema": "csda"},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    thrower_steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    thrower_name: Mapped[str] = mapped_column(Text)
+    grenade_entity_id: Mapped[int] = mapped_column(Integer)
+    grenade_type: Mapped[str] = mapped_column(Text)
+    team: Mapped[str] = mapped_column(Text, default="")
+
+    # Timing
+    throw_tick: Mapped[int] = mapped_column(Integer)
+    detonate_tick: Mapped[int] = mapped_column(Integer)
+    duration_ticks: Mapped[int] = mapped_column(Integer)
+
+    # Positions
+    throw_pos_x: Mapped[float] = mapped_column(Numeric(10, 2))
+    throw_pos_y: Mapped[float] = mapped_column(Numeric(10, 2))
+    throw_pos_z: Mapped[float] = mapped_column(Numeric(10, 2))
+    detonate_pos_x: Mapped[float] = mapped_column(Numeric(10, 2))
+    detonate_pos_y: Mapped[float] = mapped_column(Numeric(10, 2))
+    detonate_pos_z: Mapped[float] = mapped_column(Numeric(10, 2))
+
+    # Trajectory (downsampled, JSON)
+    trajectory_points: Mapped[str] = mapped_column(Text)
+    max_distance: Mapped[float] = mapped_column(Numeric(10, 2))
+    is_flash: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    match: Mapped["Match"] = relationship(back_populates="grenade_trajectory_summaries")
+
+
+# ── Additional game events (batch-ingested) ────────────────────────────────
+
+
+class WeaponFire(Base):
+    """Every weapon shot (weapon_fire event). Enables accuracy/spray analysis."""
+    __tablename__ = "weapon_fires"
+    __table_args__ = (
+        Index("ix_wf_match_round", "match_id", "round_number"),
+        {"schema": "csda", "extend_existing": True},
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    tick: Mapped[int] = mapped_column(Integer)
+    shooter_steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    shooter_name: Mapped[str] = mapped_column(Text)
+    weapon: Mapped[str] = mapped_column(Text)
+    silenced: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    match: Mapped["Match"] = relationship(back_populates="weapon_fires")
+
+
+class PlayerBulletHit(Base):
+    """Where bullets land (player_bullet_hit event), even missed shots."""
+    __tablename__ = "player_bullet_hits"
+    __table_args__ = (
+        Index("ix_pbh_match_round", "match_id", "round_number"),
+        {"schema": "csda", "extend_existing": True},
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    tick: Mapped[int] = mapped_column(Integer)
+    shooter_steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    shooter_name: Mapped[str] = mapped_column(Text)
+    target_entity_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    penetrating_count: Mapped[int] = mapped_column(SmallInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    match: Mapped["Match"] = relationship(back_populates="player_bullet_hits")
+
+
+class PlayerSpawn(Base):
+    """Player spawn events (player_spawn). Round start positions."""
+    __tablename__ = "player_spawns"
+    __table_args__ = (
+        Index("ix_ps_match_round", "match_id", "round_number"),
+        {"schema": "csda", "extend_existing": True},
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    tick: Mapped[int] = mapped_column(Integer)
+    steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    player_name: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    match: Mapped["Match"] = relationship(back_populates="player_spawns")
+
+
+class PlayerJump(Base):
+    """Jump events (player_jump). Movement analysis."""
+    __tablename__ = "player_jumps"
+    __table_args__ = (Index("ix_pj_match_round", "match_id", "round_number"), {"schema": "csda", "extend_existing": True})
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    tick: Mapped[int] = mapped_column(Integer)
+    steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    player_name: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    match: Mapped["Match"] = relationship(back_populates="player_jumps")
+
+
+class PlayerFootstep(Base):
+    """Footstep events (player_footstep). Sound detection analysis."""
+    __tablename__ = "player_footsteps"
+    __table_args__ = (Index("ix_pf_match_round", "match_id", "round_number"), {"schema": "csda", "extend_existing": True})
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    tick: Mapped[int] = mapped_column(Integer)
+    steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    player_name: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    match: Mapped["Match"] = relationship(back_populates="player_footsteps")
+
+
+class ChatMessage(Base):
+    """In-game chat (player_chat, say, say_team)."""
+    __tablename__ = "chat_messages"
+    __table_args__ = (Index("ix_cm_match_round", "match_id", "round_number"), {"schema": "csda", "extend_existing": True})
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    tick: Mapped[int] = mapped_column(Integer)
+    steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    player_name: Mapped[str] = mapped_column(Text)
+    message: Mapped[str] = mapped_column(Text)
+    team_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    match: Mapped["Match"] = relationship(back_populates="chat_messages")
+
+
+class RoundMVP(Base):
+    """Round MVP (round_mvp event). Separate from scoreboard."""
+    __tablename__ = "round_mvps"
+    __table_args__ = (Index("ix_rmvp_match_round", "match_id", "round_number"), {"schema": "csda", "extend_existing": True})
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    tick: Mapped[int] = mapped_column(Integer)
+    steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    player_name: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    music_kit_id: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    match: Mapped["Match"] = relationship(back_populates="round_mvps")
+
+
+class ItemEquip(Base):
+    """Weapon switch (item_equip event)."""
+    __tablename__ = "item_equips"
+    __table_args__ = (Index("ix_ie_match_round", "match_id", "round_number"), {"schema": "csda", "extend_existing": True})
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    tick: Mapped[int] = mapped_column(Integer)
+    steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    player_name: Mapped[str] = mapped_column(Text)
+    weapon: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    match: Mapped["Match"] = relationship(back_populates="item_equips")
+
+
+class PlayerPing(Base):
+    """Map pings (player_ping, player_ping_world). Tactical info."""
+    __tablename__ = "player_pings"
+    __table_args__ = (Index("ix_pp_match_round", "match_id", "round_number"), {"schema": "csda", "extend_existing": True})
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    tick: Mapped[int] = mapped_column(Integer)
+    steam_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    player_name: Mapped[str] = mapped_column(Text)
+    is_world_ping: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    match: Mapped["Match"] = relationship(back_populates="player_pings")
+
+
+class BuyTimeEvent(Base):
+    """Buy phase timing (buytime_ended, enter_buytime, exit_buytime)."""
+    __tablename__ = "buytime_events"
+    __table_args__ = (Index("ix_bte_match_round", "match_id", "round_number"), {"schema": "csda", "extend_existing": True})
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    match_id: Mapped[int] = mapped_column(Integer, ForeignKey("csda.matches.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(SmallInteger)
+    tick: Mapped[int] = mapped_column(Integer)
+    event_type: Mapped[str] = mapped_column(Text)  # "buytime_ended" | "enter_buytime" | "exit_buytime"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    match: Mapped["Match"] = relationship(back_populates="buytime_events")
+
+
 class PlayerRoundStats(Base):
     """Per-player cumulative stats at a tick (from ActionTrackingServices).
 
@@ -1198,9 +1427,9 @@ class PlayerRoundStats(Base):
     round_number: Mapped[int] = mapped_column(SmallInteger)
     tick: Mapped[int] = mapped_column(Integer)
     steam_id: Mapped[int] = mapped_column(BigInteger)
-    kills: Mapped[int] = mapped_column(SmallInteger)
-    assists: Mapped[int] = mapped_column(SmallInteger)
-    deaths: Mapped[int] = mapped_column(SmallInteger)
+    kills: Mapped[int] = mapped_column(Integer)
+    assists: Mapped[int] = mapped_column(Integer)
+    deaths: Mapped[int] = mapped_column(Integer)
     damage: Mapped[int] = mapped_column(Integer)
     headshot_kills: Mapped[int] = mapped_column(Integer)
     cash_earned: Mapped[int] = mapped_column(Integer)

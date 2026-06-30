@@ -645,3 +645,86 @@ def parse_grenade_trajectories(df: pd.DataFrame) -> list[GrenadeTrajectory]:
             thrower_name=_str(row.get("name")),
         ))
     return results
+
+
+def parse_player_bullet_hit(df: pd.DataFrame) -> list[PlayerBulletHit]:
+    """Columns: target_entity_id, penetrating_count, shooter, tick.
+
+    `shooter` may be a serialized entity list; we extract steamid/name from it.
+    """
+    results = []
+    for _, row in df.iterrows():
+        shooter_raw = row.get("shooter")
+        sid = _sid(shooter_raw) if shooter_raw is not None else None
+        name = _str(shooter_raw) if shooter_raw is not None else ""
+        results.append(PlayerBulletHit(
+            tick=int(row["tick"]),
+            shooter_steam_id=sid,
+            shooter_name=name,
+            target_entity_id=int(row.get("target_entity_id", 0)) or None,
+            penetrating_count=int(row.get("penetrating_count", 0)),
+        ))
+    return results
+
+
+def parse_chat_message(df: pd.DataFrame) -> list[ChatMessage]:
+    """Columns: entindex, sayteam, text, tick, user_name, user_steamid.
+
+    Handles player_chat, say, and say_team events by reading the
+    "sayteam"/"team_only" flag.
+    """
+    results = []
+    for _, row in df.iterrows():
+        results.append(ChatMessage(
+            tick=int(row["tick"]),
+            player_steam_id=_sid(row.get("user_steamid")),
+            player_name=_str(row.get("user_name")),
+            message=_str(row.get("text", "")),
+            team_only=_bool(row.get("sayteam", False)) or _bool(row.get("team_only", False)),
+        ))
+    return results
+
+
+def parse_player_ping(df: pd.DataFrame) -> list[PlayerPing]:
+    """Columns: entindex, tick, user_name, user_steamid.
+
+    player_ping and player_ping_world use the same event name with a flag
+    in the event data; we approximate by always reading the base columns
+    and letting the caller flag is_world_ping if available.
+    """
+    results = []
+    for _, row in df.iterrows():
+        results.append(PlayerPing(
+            tick=int(row["tick"]),
+            player_steam_id=_sid(row.get("user_steamid")),
+            player_name=_str(row.get("user_name")),
+            is_world_ping=False,
+        ))
+    return results
+
+
+def parse_weapon_drop(df: pd.DataFrame) -> list[WeaponDropEvent]:
+    """Columns: dropper_name, dropper_steamid, picker_name, picker_steamid,
+    tick, weapon_name."""
+    results = []
+    for _, row in df.iterrows():
+        results.append(WeaponDropEvent(
+            tick=int(row["tick"]),
+            dropper_steam_id=_sid(row.get("dropper_steamid")),
+            dropper_name=_str(row.get("dropper_name")),
+            picker_steam_id=_sid(row.get("picker_steamid")),
+            picker_name=_str(row.get("picker_name")),
+            weapon=_str(row.get("weapon_name", "")),
+        ))
+    return results
+
+
+def parse_buytime_event(df: pd.DataFrame, event_type: str) -> list[BuyTimeEvent]:
+    """Generic parser for buytime_ended, enter_buytime, exit_buytime."""
+    results = []
+    for _, row in df.iterrows():
+        results.append(BuyTimeEvent(
+            tick=int(row["tick"]),
+            event_type=event_type,
+        ))
+    return results

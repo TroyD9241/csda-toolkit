@@ -291,6 +291,42 @@ class PlayerSpawn:
 
 
 @dataclass
+class PlayerBulletHit:
+    """A player_bullet_hit event (where bullets land, even missed shots)."""
+    tick: int
+    shooter_steam_id: Optional[int] = None
+    shooter_name: str = ""
+    target_entity_id: Optional[int] = None
+    penetrating_count: int = 0
+
+
+@dataclass
+class ChatMessage:
+    """A player_chat / say / say_team event."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+    message: str = ""
+    team_only: bool = False
+
+
+@dataclass
+class PlayerPing:
+    """A player_ping / player_ping_world event (map ping)."""
+    tick: int
+    player_steam_id: Optional[int] = None
+    player_name: str = ""
+    is_world_ping: bool = False
+
+
+@dataclass
+class BuyTimeEvent:
+    """A buytime_ended / enter_buytime / exit_buytime event."""
+    tick: int
+    event_type: str  # "buytime_ended" | "enter_buytime" | "exit_buytime"
+
+
+@dataclass
 class PlayerJump:
     """A player_jump event."""
     tick: int
@@ -572,6 +608,7 @@ class PlayerRoundStats:
     """Per-player cumulative stats at a tick (from ActionTrackingServices)."""
     tick: int
     steam_id: int
+    round_number: int = 0
     kills: int = 0
     assists: int = 0
     deaths: int = 0

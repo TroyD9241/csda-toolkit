@@ -66,13 +66,27 @@ def compute_round_swing(
     steam_to_side: dict[int, str],
     round_start: int,
     round_end: int,
+    damage_events: list = None,
+    blind_events: list = None,
+    killer_credit: float = 0.5,
+    all_player_sids: list = None,
 ) -> float:
-    """Compute Swing for a player in one round.
+    """Compute Swing for a player in one round, with credit splitting.
 
-    Swing = Σ(K * ΔWP)
-    For each kill the player made:
-        ΔWP = win_prob(after) - win_prob(before)
-    Uses all kills in the round to track alive state correctly.
+    Swing = Σ(credit_share * K * ΔWP) for each kill in the round
+    For each kill:
+        ΔWP = win_prob(after) - win_prob(before)  (own win prob increase)
+        K ≈ 64 scaling constant
+        credit_share: fraction of the swing attributed to `steam_id`.
+            By default, the killer gets `killer_credit` (50%); the rest
+            is split among damage dealers and flashers (if provided).
+
+    `all_player_sids` should be the full list of 10 player steam_ids in the match
+    so alive counts start at 5 per side, not just the subset who appear in kills.
+    Without it, alive counts are systematically too low → ΔWP too large.
+
+    Without damage_events/blind_events, the killer gets 100% credit
+    (legacy behavior, overshoots HLTV by ~2x).
     """
     K = 64.0
 
@@ -82,27 +96,55 @@ def compute_round_swing(
         if round_start < k.tick <= round_end
     ]
 
-    player_round_kills = [
-        k for k in all_round_kills
-        if k.killer_steam_id == steam_id
-    ]
-
-    if not player_round_kills:
+    if not all_round_kills:
         return 0.0
 
     player_side = steam_to_side.get(steam_id)
     if player_side is None:
         return 0.0
 
-    # Collect all players who appear in any kill in the round
-    all_steam_ids: set[int] = set()
-    for k in all_round_kills:
-        if k.killer_steam_id:
-            all_steam_ids.add(k.killer_steam_id)
-        if k.victim_steam_id:
-            all_steam_ids.add(k.victim_steam_id)
+    # Use full player list if provided, else fall back to kill-only set
+    if all_player_sids:
+        all_steam_ids: set[int] = set(all_player_sids)
+    else:
+        all_steam_ids = set()
+        for k in all_round_kills:
+            if k.killer_steam_id:
+                all_steam_ids.add(k.killer_steam_id)
+            if k.victim_steam_id:
+                all_steam_ids.add(k.victim_steam_id)
 
-    # Initialize: everyone in the round starts alive
+    # Build per-victim damage contributors from damage_events (if provided)
+    damage_contributors: dict[int, dict[int, int]] = {}
+    if damage_events:
+        for ev in damage_events:
+            if not (round_start < ev.tick <= round_end):
+                continue
+            if not ev.attacker_steam_id or not ev.victim_steam_id:
+                continue
+            if steam_to_side.get(ev.attacker_steam_id) == steam_to_side.get(ev.victim_steam_id):
+                continue
+            if ev.attacker_steam_id == ev.victim_steam_id:
+                continue
+            damage_contributors.setdefault(ev.victim_steam_id, {})
+            damage_contributors[ev.victim_steam_id][ev.attacker_steam_id] = (
+                damage_contributors[ev.victim_steam_id].get(ev.attacker_steam_id, 0)
+                + (ev.dmg_health or 0)
+            )
+
+    # Build per-victim flasher set from blind_events (if provided)
+    flashers: dict[int, set[int]] = {}
+    if blind_events:
+        for ev in blind_events:
+            if not (round_start < ev.tick <= round_end):
+                continue
+            if not ev.attacker_steam_id or not ev.victim_steam_id:
+                continue
+            if steam_to_side.get(ev.attacker_steam_id) == steam_to_side.get(ev.victim_steam_id):
+                continue
+            flashers.setdefault(ev.victim_steam_id, set()).add(ev.attacker_steam_id)
+
+    # Initialize: all 10 players start alive (or fewer if not provided)
     alive: dict[int, bool] = {sid: True for sid in all_steam_ids}
     swing_sum = 0.0
 
@@ -116,7 +158,6 @@ def compute_round_swing(
             if alive.get(sid, False) and steam_to_side.get(sid) != player_side
         )
 
-        # Apply the kill (victim dies)
         victim = k.victim_steam_id
         if victim in alive:
             alive[victim] = False
@@ -130,13 +171,52 @@ def compute_round_swing(
             if alive.get(sid, False) and steam_to_side.get(sid) != player_side
         )
 
-        # Only accumulate swing for this player's own kills
-        if k.killer_steam_id == steam_id:
-            # GRID returns OPPONENT win probability, so we flip:
-            # Kill reduces opp_wp → my win chance increases → positive swing
-            opp_wp_before = win_prob(my_alive_before, opp_alive_before)
-            opp_wp_after = win_prob(my_alive_after, opp_alive_after)
-            swing_sum += K * (opp_wp_before - opp_wp_after)
+        # ΔWP from this kill (own win prob increase; flip since grid is opp_wp)
+        opp_wp_before = win_prob(my_alive_before, opp_alive_before)
+        opp_wp_after = win_prob(my_alive_after, opp_alive_after)
+        delta_wp = K * (opp_wp_before - opp_wp_after)
+
+        if delta_wp == 0.0:
+            continue
+
+        killer = k.killer_steam_id
+
+        # Negative swing for the victim (they "lost" the round for their team)
+        if victim == steam_id:
+            swing_sum -= delta_wp  # full negative credit for own death
+            continue
+
+        # Positive credit split: killer gets killer_credit, rest split
+        # among damage dealers + flashers (excluding the killer).
+        contributors: dict[int, float] = {}
+        contributors[killer] = killer_credit
+
+        remaining = 1.0 - killer_credit
+        if damage_contributors and victim in damage_contributors and remaining > 0:
+            dmg_by_player = {
+                p: dmg for p, dmg in damage_contributors[victim].items() if p != killer
+            }
+            total_dmg = sum(dmg_by_player.values())
+            if total_dmg > 0:
+                for p, dmg in dmg_by_player.items():
+                    contributors[p] = contributors.get(p, 0.0) + remaining * (dmg / total_dmg)
+            else:
+                if flashers and victim in flashers:
+                    fs = [f for f in flashers[victim] if f != killer]
+                    if fs:
+                        per = remaining / len(fs)
+                        for f in fs:
+                            contributors[f] = contributors.get(f, 0.0) + per
+        elif flashers and victim in flashers and remaining > 0:
+            fs = [f for f in flashers[victim] if f != killer]
+            if fs:
+                per = remaining / len(fs)
+                for f in fs:
+                    contributors[f] = contributors.get(f, 0.0) + per
+
+        # Attribute this kill's positive swing to the target player
+        credit = contributors.get(steam_id, 0.0)
+        swing_sum += credit * delta_wp
 
     return swing_sum
 
