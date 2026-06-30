@@ -87,9 +87,12 @@ class CsdaParser:
         self._kills: list[Kill] | None = None
         self._damage: list[DamageEvent] | None = None
 
-    def _event_df(self, event_name: str) -> pd.DataFrame:
-        """Safely parse an event - our fork returns [] for events that don't fire."""
-        result = self._parser.parse_event(event_name)
+    def _event_df(self, event_name: str, **kwargs: list[str]) -> pd.DataFrame:
+        """Safely parse an event - our fork returns [] for events that don't fire.
+        
+        Supports demoparser2 parse_event kwargs: player=[...], other=[...].
+        """
+        result = self._parser.parse_event(event_name, **kwargs)
         if isinstance(result, list):
             return pd.DataFrame()
         return result

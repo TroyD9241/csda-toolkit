@@ -365,6 +365,8 @@ def parse_player_hurt(df: pd.DataFrame) -> list[DamageEvent]:
             health=int(row.get("health", 0)),
             armor=int(row.get("armor", 0)),
             hitgroup_name=_hitgroup_name(row.get("hitgroup")),
+            attacker_last_place_name=_str(row.get("attacker_last_place_name", "")),
+            victim_last_place_name=_str(row.get("user_last_place_name", "")),
         ))
     return results
 

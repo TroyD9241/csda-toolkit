@@ -4,7 +4,7 @@ import os
 from contextlib import contextmanager
 from typing import Generator, Optional
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -28,7 +28,7 @@ def init_db(engine: Engine) -> None:
     """Create all tables in the csda schema."""
     # Ensure the csda schema exists
     with engine.connect() as conn:
-        conn.execute("CREATE SCHEMA IF NOT EXISTS csda")
+        conn.execute(text("CREATE SCHEMA IF NOT EXISTS csda"))
         conn.commit()
     Base.metadata.create_all(engine)
 
@@ -56,7 +56,7 @@ class Database:
     def create_schema(self) -> None:
         """Create the csda schema and all tables."""
         with self.engine.connect() as conn:
-            conn.execute("CREATE SCHEMA IF NOT EXISTS csda")
+            conn.execute(text("CREATE SCHEMA IF NOT EXISTS csda"))
             conn.commit()
         Base.metadata.create_all(self.engine)
 

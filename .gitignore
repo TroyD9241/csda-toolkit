@@ -20,5 +20,8 @@ demos/
 # Sisyphus work logs
 .sisyphus/notepads/
 
+# AI orchestration tool artifacts
+.omo/
+
 # Environment
 .env

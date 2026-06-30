@@ -248,7 +248,12 @@ class Kill:
 
 @dataclass
 class DamageEvent:
-    """A damage event (player_hurt)."""
+    """A damage event (player_hurt).
+
+    The last_place_name fields come from CS2's internal map zone labels.
+    Values like 'Long A', 'BombsiteA', 'Mid', 'T Spawn', 'CT Spawn' etc.
+    are provided directly by the game engine — no bounding-box inference needed.
+    """
     tick: int
     round_number: int = 0
     attacker_steam_id: Optional[int] = None
@@ -262,6 +267,8 @@ class DamageEvent:
     health: int = 0
     armor: int = 0
     hitgroup_name: str = "unknown"
+    attacker_last_place_name: str = ""
+    victim_last_place_name: str = ""
 
 
 @dataclass
@@ -740,3 +747,21 @@ class Classification:
     label_value: str = ""
     confidence: float = 0.0
     metadata: dict = field(default_factory=dict)
+
+
+# ── Side assignment models ───────────────────────────────────────────────────
+
+
+@dataclass
+class SideAssignment:
+    """Side assignment for one team slot in one round (including overtime).
+
+    Derived from player_frame data at the round's start tick:
+    - Look up any player in team_slot 1 or 2 at round start
+    - team_num 2 = T, team_num 3 = CT
+    - overtime_index 0 = regulation, 1..N = overtime round pairs
+    """
+    team_slot: int           # 1 or 2
+    round_number: int        # 1-based round index
+    overtime_index: int = 0  # 0 for regulation, 1..N for OT
+    side: str = ""           # "t" or "ct"

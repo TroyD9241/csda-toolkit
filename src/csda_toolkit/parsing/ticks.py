@@ -266,8 +266,69 @@ def extract_controller_frames(
 def extract_player_round_stats(
     parser: DemoParser,
     ticks: Optional[Sequence[int]] = None,
+    round_end_ticks: Optional[dict[int, int]] = None,
 ) -> list[PlayerRoundStats]:
-    """Extract per-round cumulative stats from ActionTrackingServices."""
+    """Extract per-round cumulative stats from ActionTrackingServices.
+
+    Args:
+        parser: DemoParser instance.
+        ticks: Optional explicit tick list. If None, uses demoparser default.
+        round_end_ticks: Optional mapping of round_number -> end_tick.
+            When provided, extracts PRS at round end ticks and assigns
+            round_number correctly. Falls back to the last available tick
+            before the next round's start if end_tick is unavailable.
+
+    Returns:
+        List of PlayerRoundStats with round_number set when round_end_ticks
+        is provided.
+    """
+    if round_end_ticks is not None:
+        # Use round end ticks for snapshot selection
+        sorted_rounds = sorted(round_end_ticks.items(), key=lambda x: x[1])
+        end_ticks = [et for _, et in sorted_rounds]
+        df = parser.parse_ticks(ACTION_FIELDS, ticks=end_ticks)
+        if df.empty:
+            return []
+
+        # Build mapping: end_tick -> round_number
+        tick_to_round: dict[int, int] = {et: rn for rn, et in sorted_rounds}
+
+        stats: list[PlayerRoundStats] = []
+        for i in range(len(df)):
+            tick = int(df.iloc[i]["tick"])
+            sid = int(df.iloc[i]["steamid"])
+            # Find the round this tick belongs to
+            # First try exact match
+            round_num = tick_to_round.get(tick)
+            if round_num is None:
+                # Fallback: find the closest end_tick that is <= this tick
+                closest = None
+                for et, rn in sorted_rounds:
+                    if et <= tick:
+                        closest = rn
+                    else:
+                        break
+                round_num = closest if closest is not None else 0
+
+            stats.append(
+                PlayerRoundStats(
+                    tick=tick,
+                    steam_id=sid,
+                    round_number=round_num,
+                    kills=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iKills"),
+                    assists=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iAssists"),
+                    deaths=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iDeaths"),
+                    damage=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iDamage"),
+                    headshot_kills=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iHeadShotKills"),
+                    cash_earned=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iCashEarned"),
+                    equipment_value=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iEquipmentValue"),
+                    utility_damage=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iUtilityDamage"),
+                    enemies_flashed=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iEnemiesFlashed"),
+                )
+            )
+        return stats
+
+    # Legacy path: no round_end_ticks provided
     df = parser.parse_ticks(ACTION_FIELDS, ticks=ticks)
     if df.empty:
         return []
@@ -281,6 +342,7 @@ def extract_player_round_stats(
             PlayerRoundStats(
                 tick=tick,
                 steam_id=sid,
+                round_number=0,  # caller must assign from round boundaries
                 kills=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iKills"),
                 assists=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iAssists"),
                 deaths=_int_val(df, i, "CCSPlayerController.CCSPlayerController_ActionTrackingServices.m_iDeaths"),
@@ -294,6 +356,34 @@ def extract_player_round_stats(
         )
 
     return stats
+
+
+def validate_prs_cumulative(stats: list[PlayerRoundStats]) -> list[str]:
+    """Validate PRS data for monotonicity and per-round delta sanity.
+
+    Returns a list of warning strings (empty if all OK).
+    """
+    warnings = []
+    by_player: dict[int, list[PlayerRoundStats]] = {}
+    for s in stats:
+        by_player.setdefault(s.steam_id, []).append(s)
+    for sid, rows in by_player.items():
+        rows.sort(key=lambda r: (r.round_number, r.tick))
+        prev_damage = 0
+        prev_round = 0
+        for r in rows:
+            if r.damage < prev_damage:
+                warnings.append(
+                    f"steam_id={sid} round={r.round_number} tick={r.tick}: "
+                    f"damage DECREASED from {prev_damage} to {r.damage}"
+                )
+            if r.round_number > prev_round + 1 and prev_round > 0:
+                warnings.append(
+                    f"steam_id={sid} round jump: {prev_round} -> {r.round_number}"
+                )
+            prev_damage = r.damage
+            prev_round = r.round_number
+    return warnings
 
 
 def extract_player_money(
