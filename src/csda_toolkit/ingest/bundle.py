@@ -13,7 +13,7 @@ import os
 import re
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import select
+from sqlalchemy import select, func, case, text
 from sqlalchemy.orm import Session
 
 from csda_toolkit.db.database import Database
@@ -443,6 +443,8 @@ class IngestBundle:
                 )
                 session.add(mt_t)
                 session.flush()
+                # NOTE: match_teams.score and is_winner populated after step 9
+                # (rounds insert), when the final score is available.
 
                 # Update match_players with team assignments and build index lookup
                 for sid in ct_steam_ids:
@@ -478,7 +480,30 @@ class IngestBundle:
                     session.add(round_model)
                     result.rounds_created += 1
 
-                # 8b. Build tick → round_number lookup for pickup assignment
+                # 9b. Populate match_teams.score and is_winner from round wins
+                # (demoparser's round.score_t/score_ct are 0 in these demos;
+                # compute from per-round winner_side instead)
+                round_wins = session.execute(
+                    select(
+                        func.sum(case((RoundModel.winner_side == "ct", 1), else_=0)).label("ct_wins"),
+                        func.sum(case((RoundModel.winner_side == "t", 1), else_=0)).label("t_wins"),
+                    )
+                    .where(RoundModel.match_id == match_model.id)
+                ).one()
+                ct_wins = int(round_wins.ct_wins or 0)
+                t_wins = int(round_wins.t_wins or 0)
+                session.execute(
+                    MatchTeamModel.__table__.update()
+                    .where(MatchTeamModel.id == mt_ct.id)
+                    .values(score=ct_wins, is_winner=(ct_wins > t_wins) if (ct_wins or t_wins) else None)
+                )
+                session.execute(
+                    MatchTeamModel.__table__.update()
+                    .where(MatchTeamModel.id == mt_t.id)
+                    .values(score=t_wins, is_winner=(t_wins > ct_wins) if (ct_wins or t_wins) else None)
+                )
+
+                  # 8b. Build tick → round_number lookup for pickup assignment
                 round_tick_starts: list[int] = []
                 round_tick_ends: list[int] = []
                 round_numbers: list[int] = []
@@ -853,15 +878,24 @@ class IngestBundle:
                     logger.warning("Inferno event ingest failed (non-fatal): %s", e)
 
                 # 17. Persist flashbang blind events
+                # Build steam_id -> display_name map from the players table
+                # for victim name lookup (demoparser doesn't always include victim_name)
+                # Use raw SQL to avoid SQLAlchemy session caching issues
+                player_name_map: dict[int, str] = {}
+                for row in session.execute(text(
+                    "SELECT steam_id, COALESCE(last_known_name, '') FROM csda.players"
+                )).all():
+                    player_name_map[row[0]] = row[1] or ""
                 try:
                     for ev in self._parser.player_blinds():
+                        victim_name = ev.victim_name or player_name_map.get(ev.victim_steam_id, "")
                         model = PlayerBlindModel(
                             match_id=match_model.id,
                             tick=ev.tick,
                             attacker_steam_id=ev.attacker_steam_id,
                             attacker_name=ev.attacker_name or "",
                             victim_steam_id=ev.victim_steam_id,
-                            victim_name=ev.victim_name or "",
+                            victim_name=victim_name,
                             blind_duration=ev.blind_duration,
                         )
                         session.add(model)
@@ -1343,13 +1377,22 @@ class IngestBundle:
                 dur = _est_dur(d)
                 if dur <= 0:
                     continue
+                # Look up victim name from players table (raw SQL avoids session caching)
+                if not hasattr(self, '_victim_name_cache'):
+                    self._victim_name_cache = {}
+                if victim_sid not in self._victim_name_cache:
+                    name_row = session.execute(text(
+                        "SELECT COALESCE(last_known_name, '') FROM csda.players WHERE steam_id = :sid"
+                    ), {"sid": victim_sid}).first()
+                    self._victim_name_cache[victim_sid] = name_row[0] if name_row else ""
+
                 session.add(PlayerBlindModel(
                     match_id=match_id,
                     tick=fb.tick,
                     attacker_steam_id=thrower_sid,
                     attacker_name=fb.player_name or "",
                     victim_steam_id=victim_sid,
-                    victim_name="",
+                    victim_name=self._victim_name_cache[victim_sid],
                     blind_duration=round(dur, 2),
                 ))
                 inserted += 1

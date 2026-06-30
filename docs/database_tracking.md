@@ -138,10 +138,10 @@ Schema: `(match_id, team_slot, round_number) → side` (`"CT"` or `"T"`)
 | Date | Severity | Description | Status |
 |------|----------|-------------|--------|
 | recent | HIGH | `match_players` 2 rows with NULL team_side (mezii, apEX in match 12/dust2) | RESOLVED |
-| recent | MED | `player_blinds.victim_name` empty string (not populated) | OPEN |
+| recent | MED | `player_blinds.victim_name` empty string (not populated) | RESOLVED |
 | recent | MED | `player_round_weapons.dropped_at_tick` NULL for all rows | OPEN |
 | recent | LOW | `events.start_date`/`end_date` NULL (placeholder row) | OPEN |
-| recent | LOW | `match_teams.score`/`is_winner` NULL (not populated) | OPEN |
+| recent | LOW | `match_teams.score`/`is_winner` NULL (not populated) | RESOLVED |
 | recent | LOW | `matches.canonical_match_json`/`played_at_source` NULL (not populated) | OPEN |
 | recent | LOW | `teams.country_code`/`team_type`/`parent_team_id` NULL (not populated) | OPEN |
 | recent | FIXED | PRS SMALLINT overflow on cumulative values | RESOLVED (columns widened to INTEGER) |
@@ -151,5 +151,5 @@ Schema: `(match_id, team_slot, round_number) → side` (`"CT"` or `"T"`)
 
 ## External References (for future use)
 
-- [cs-demo-manager CLI docs](https://cs-demo-manager.com/docs/cli) � A reference for CS2 demo CLI tooling. Useful for cross-checking our demoparser2-based ingest against an independent implementation, and for discovering event types/columns we may be missing.
+- [cs-demo-manager CLI docs](https://cs-demo-manager.com/docs/cli) � A reference for CS2 demo CLI tooling. Useful for cross-checking our demoparser2-based ingest against an independent implementation, and for discovering event types/columns we may be missing.
 
